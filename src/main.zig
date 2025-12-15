@@ -49,7 +49,7 @@ fn step_frame(cpu: *DmgCpu) noreturn {
 
     while (frame_cycles < MAX_CYCLES_PER_FRAME) {
         // cycles taken this one cpu step
-        const cycles = cpu.step();
+        const cycles = cpu.step() * 4;
 
         // then we sync hardware depending on how much time we took
         // update_timers(cycles);
