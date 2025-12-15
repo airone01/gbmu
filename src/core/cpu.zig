@@ -1,11 +1,14 @@
 const std = @import("std");
 const Bus = @import("bus.zig").Bus;
+const Config = @import("../config.zig").Config;
 
 pub const Cpu = struct {
     bus: *Bus,
     cycles: u128 = 0,
     ime: bool = false, // interrupt master enable
     halted: bool = false, // CPU halted state
+
+    config: Config,
 
     // 8-bit general purpose registers
     a: u8, // accumulator
@@ -27,8 +30,9 @@ pub const Cpu = struct {
     pub const FLAG_H: u8 = 0b0010_0000; // half carry flag
     pub const FLAG_C: u8 = 0b0001_0000; // carry flag
 
-    pub fn init(bus: *Bus) Cpu {
+    pub fn init(config: Config, bus: *Bus) Cpu {
         return Cpu{
+            .config = config,
             .bus = bus,
             .ime = false,
             .halted = false,
@@ -1199,7 +1203,8 @@ pub const Cpu = struct {
 
             // fallback for unimplemented opcodes
             else => {
-                std.debug.print("DEBGU: Unknown opcode '0x{x:0>2}'\n", .{opcode});
+                if (self.config.debug)
+                    std.debug.print("DEBUG: Unknown opcode '0x{x:0>2}'\n", .{opcode});
                 return 0;
             },
         }

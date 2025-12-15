@@ -84,13 +84,13 @@ pub fn build(b: *std.Build) void {
                 // can be extremely useful in case of collisions (which can happen
                 // importing modules from different packages).
                 .{ .name = "gbmu", .module = mod },
-                .{ .name = "sdl2", .module = sdk.getNativeModule() }
+                .{ .name = "sdl2", .module = sdk.getNativeModule() },
+                .{ .name = "yazap", .module = b.dependency("yazap", .{}).module("yazap") },
             },
         }),
     });
 
     sdk.link(exe, .dynamic, sdl.Library.SDL2);
-
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default

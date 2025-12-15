@@ -2,6 +2,7 @@ const std = @import("std");
 const Cpu = @import("cpu.zig").Cpu;
 const Bus = @import("bus.zig").Bus;
 const Ppu = @import("ppu.zig").Ppu;
+const Config = @import("../config.zig").Config;
 const Joypad = @import("joypad.zig").Joypad;
 
 pub const GameBoy = struct {
@@ -10,14 +11,17 @@ pub const GameBoy = struct {
     ppu: Ppu,
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, rom_data: []const u8) !GameBoy {
+    config: Config,
+
+    pub fn init(config: Config, allocator: std.mem.Allocator, rom_data: []const u8) !GameBoy {
         const bus = try allocator.create(Bus);
         bus.* = try Bus.init(allocator, rom_data);
 
-        const cpu = Cpu.init(bus);
+        const cpu = Cpu.init(config, bus);
         const ppu = Ppu.init(bus);
 
         return GameBoy{
+            .config = config,
             .cpu = cpu,
             .bus = bus,
             .ppu = ppu,

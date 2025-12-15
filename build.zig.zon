@@ -65,6 +65,10 @@
             .url = "https://github.com/ikskuh/SDL.zig/archive/master.tar.gz",
             .hash = "SDL2-0.0.0-yMCQivWqBABTfB8opAADsLCGxxu20vijLBW2hHdpTR-L",
         },
+        .yazap = .{
+            .url = "https://github.com/prajwalch/yazap/archive/a920616e3a6676362735a2f5ae195ec320f058fb.tar.gz",
+            .hash = "yazap-0.6.3-Z1t-Emb0AQD_SkYf4dz_nEmAh9oRKiu6nexSJMGK3wcf",
+        },
     },
     // Specifies the set of files and directories that are included in this package.
     // Only files and directories listed here are included in the `hash` that
