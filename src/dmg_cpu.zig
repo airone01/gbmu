@@ -410,6 +410,21 @@ pub const DmgCpu = struct {
                 return 1;
             },
 
+            // INC ss (increment 16-bit register)
+            // opcodes: 03 (BC), 13 (DE), 23 (HL), 33 (SP)
+            // cycles: 8 (2 machine cycles)
+            0x03, 0x13, 0x23, 0x33 => {
+                const target_code = (opcode >> 4) & 0b11;
+                switch (target_code) {
+                    0 => self.set_bc(self.get_bc() +% 1),
+                    1 => self.set_de(self.get_de() +% 1),
+                    2 => self.set_hl(self.get_hl() +% 1),
+                    3 => self.sp +%= 1,
+                    else => unreachable,
+                }
+                return 2;
+            },
+
             // CP n (compare A with immediate value n)
             // opcode: FE, Cycles: 8 (2 machine cycles)
             0xFE => {
@@ -459,6 +474,24 @@ pub const DmgCpu = struct {
                 const addr = 0xFF00 + @as(u16, offset);
                 self.a = self.bus.read(addr);
                 return 3;
+            },
+
+            // LD A, (HLI) (load A from (HL), then increment HL)
+            // Oopcode: 2A, cycles: 8 (2 machine cycles)
+            0x2A => {
+                const addr = self.get_hl();
+                self.a = self.bus.read(addr);
+                self.set_hl(addr +% 1); // wrapping addition (+%)
+                return 2;
+            },
+
+            // LD (rr), A (store A into address pointed by BC or DE)
+            // opcodes: 02 (BC), 12 (DE)
+            // cycles: 8 (2 machine cycles)
+            0x02, 0x12 => {
+                const addr = if (opcode == 0x02) self.get_bc() else self.get_de();
+                self.bus.write(addr, self.a);
+                return 2;
             },
 
             // EI (Enable Interrupts)
