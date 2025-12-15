@@ -505,6 +505,39 @@ pub const DmgCpu = struct {
                 return if (src_code == 0b110) 2 else 1;
             },
 
+            // ADD A, n (add immediate value n to A)
+            0xC6 => {
+                const n = self.fetch();
+                const a_val = self.a;
+                const result = a_val +% n;
+                self.a = result;
+
+                const z_flag = if (result == 0) FLAG_Z else 0;
+                // half carry: check bit 3 overflow
+                const h_flag = if ((a_val & 0x0F) + (n & 0x0F) > 0x0F) FLAG_H else 0;
+                // carry: check bit 7 overflow
+                const c_flag = if (@as(u16, a_val) + @as(u16, n) > 0xFF) FLAG_C else 0;
+
+                self.f = z_flag | h_flag | c_flag; // N is cleared
+                return 2;
+            },
+
+            // ADC A, n (add immediate n + carry to A)
+            0xCE => {
+                const n = self.fetch();
+                const carry = if ((self.f & FLAG_C) != 0) @as(u8, 1) else 0;
+                const a_val = self.a;
+                const result = a_val +% n +% carry;
+                self.a = result;
+
+                const z_flag = if (result == 0) FLAG_Z else 0;
+                const h_flag = if ((a_val & 0x0F) + (n & 0x0F) + carry > 0x0F) FLAG_H else 0;
+                const c_flag = if (@as(u16, a_val) + @as(u16, n) + @as(u16, carry) > 0xFF) FLAG_C else 0;
+
+                self.f = z_flag | h_flag | c_flag; // N is cleared
+                return 2;
+            },
+
             // SBC A, r (subtract with carry)
             0x98...0x9F => {
                 const src_code = opcode & 0b111;
@@ -530,6 +563,42 @@ pub const DmgCpu = struct {
                 self.f = z_flag | FLAG_N | h_flag | c_flag;
 
                 return if (src_code == 0b110) 2 else 1;
+            },
+
+            // DAA (decimal adjust accumulator)
+            0x27 => {
+                var a_val = self.a;
+                var adjust: u8 = 0;
+                var carry = false;
+
+                // if N flag is set, it was a subtraction
+                if ((self.f & FLAG_N) != 0) {
+                    if ((self.f & FLAG_H) != 0) adjust |= 0x06;
+                    if ((self.f & FLAG_C) != 0) {
+                        adjust |= 0x60;
+                        carry = true;
+                    }
+                    a_val -%= adjust;
+                } else { // addition
+                    if ((self.f & FLAG_H) != 0 or (a_val & 0x0F) > 0x09) {
+                        adjust |= 0x06;
+                    }
+                    if ((self.f & FLAG_C) != 0 or a_val > 0x99) {
+                        adjust |= 0x60;
+                        carry = true;
+                    }
+                    a_val +%= adjust;
+                }
+
+                self.a = a_val;
+
+                // Z set if result is 0
+                const z_flag = if (a_val == 0) FLAG_Z else 0;
+                // H is always cleared. N is preserved. C is set if overflow occurred/existed.
+                const c_flag = if (carry) FLAG_C else 0;
+
+                self.f = (self.f & FLAG_N) | z_flag | c_flag;
+                return 1;
             },
 
             // CP r (compare A with register r)
@@ -636,6 +705,12 @@ pub const DmgCpu = struct {
                 const addr = self.get_hl();
                 self.a = self.bus.read(addr);
                 self.set_hl(addr +% 1); // wrapping addition (+%)
+                return 2;
+            },
+
+            // LD A, (BC) (load accumulator from address in BC)
+            0x0A => {
+                self.a = self.bus.read(self.get_bc());
                 return 2;
             },
 
@@ -802,6 +877,21 @@ pub const DmgCpu = struct {
                 } else {
                     return 3;
                 }
+            },
+
+            // CCF (complement carry flag)
+            0x3F => {
+                const old_c = (self.f & FLAG_C) != 0;
+                // N=0, H=0, C=!C. Z is preserved.
+                self.f = (self.f & FLAG_Z) | (if (!old_c) FLAG_C else 0);
+                return 1;
+            },
+
+            // SCF (set carry flag)
+            0x37 => {
+                // N=0, H=0, C=1. Z preserved.
+                self.f = (self.f & FLAG_Z) | FLAG_C;
+                return 1;
             },
 
             // RET (return from subroutine)
