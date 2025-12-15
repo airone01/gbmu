@@ -231,7 +231,7 @@ pub const DmgCpu = struct {
                 // flags: Z (if result 0), N=0, H=0, C=0
                 const z_flag = if (self.a == 0) FLAG_Z else 0;
                 self.f = z_flag; // clears N, H, C automatically
-                
+
                 return if (src_code == 0b110) 2 else 1;
             },
 
@@ -333,6 +333,57 @@ pub const DmgCpu = struct {
                 self.f = (self.f & FLAG_C) | z_flag | h_flag; // N cleared
 
                 return 1;
+            },
+
+            // CP n (compare A with immediate value n)
+            // opcode: FE, Cycles: 8 (2 machine cycles)
+            0xFE => {
+                const n = self.fetch();
+                // A - n to set flags but don't store the result
+                const a_val = self.a;
+
+                const z_flag = if (a_val == n) FLAG_Z else 0;
+                const n_flag = FLAG_N; // N is always set for CP/SUB
+                // half carry: set if borrow from bit 4
+                const h_flag = if ((a_val & 0x0F) < (n & 0x0F)) FLAG_H else 0;
+                // carry: set if borrow (A < n)
+                const c_flag = if (a_val < n) FLAG_C else 0;
+
+                self.f = z_flag | n_flag | h_flag | c_flag;
+                return 2;
+            },
+
+            // SUB r (subtract register r from A)
+            // opcodes: 90...97
+            // cycles: 4 (1 machine cycle) - (HL) is 8 cycles
+            0x90...0x97 => {
+                const src_code = opcode & 0b111;
+                const val = if (src_code == 0b110)
+                    self.bus.read(self.get_hl())
+                else
+                    self.decode_register_ptr(src_code).*;
+
+                const a_val = self.a;
+                const result = a_val -% val; // wrapping subtraction
+                self.a = result;
+
+                const z_flag = if (result == 0) FLAG_Z else 0;
+                const n_flag = FLAG_N;
+                const h_flag = if ((a_val & 0x0F) < (val & 0x0F)) FLAG_H else 0;
+                const c_flag = if (a_val < val) FLAG_C else 0;
+
+                self.f = z_flag | n_flag | h_flag | c_flag;
+
+                return if (src_code == 0b110) 2 else 1;
+            },
+
+            // LDH A, (n) (Load A from (0xFF00 + n))
+            // opcode: F0, cycles: 12 (3 machine cycles)
+            0xF0 => {
+                const offset = self.fetch();
+                const addr = 0xFF00 + @as(u16, offset);
+                self.a = self.bus.read(addr);
+                return 3;
             },
 
             // fallback for unimplemented opcodes
