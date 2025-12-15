@@ -7,5 +7,6 @@ Notes
 -----
 
 * Boot ROMs: https://gbdev.gg8.se/files/roms/bootroms/
+* Test ROMs: https://www.zophar.net/pdroms/gameboy.html
 * Optimize memory: `-Doptimize=ReleaseSafe` (or `ReleaseFast`)
 

@@ -1,13 +1,11 @@
 const std = @import("std");
-const DmgBus = @import("dmg_bus.zig").DmgBus;
+const Bus = @import("bus.zig").Bus;
 
-pub const DmgCpu = struct {
-    bus: *DmgBus,
+pub const Cpu = struct {
+    bus: *Bus,
     cycles: u128 = 0,
     ime: bool = false, // interrupt master enable
     halted: bool = false, // CPU halted state
-    div_clock: u16 = 0,
-    tima_clock: u16 = 0,
 
     // 8-bit general purpose registers
     a: u8, // accumulator
@@ -29,13 +27,11 @@ pub const DmgCpu = struct {
     pub const FLAG_H: u8 = 0b0010_0000; // half carry flag
     pub const FLAG_C: u8 = 0b0001_0000; // carry flag
 
-    pub fn init(bus: *DmgBus) DmgCpu {
-        return DmgCpu{
+    pub fn init(bus: *Bus) Cpu {
+        return Cpu{
             .bus = bus,
             .ime = false,
             .halted = false,
-            .div_clock = 0,
-            .tima_clock = 0,
             // initial values based for DMG boot state
             .a = 0x01, // 0x01 for DMG, 0x11 for CGB
             .f = 0xB0,
@@ -51,7 +47,7 @@ pub const DmgCpu = struct {
     }
 
     /// helper to read an intermediate u8 val
-    fn fetch(self: *DmgCpu) u8 {
+    fn fetch(self: *Cpu) u8 {
         const val = self.bus.read(self.pc);
         // note: simpler to increment the PC here
         self.pc +%= 1;
@@ -63,52 +59,52 @@ pub const DmgCpu = struct {
     // defined as High-Low (e.g., B is High, C is Low).
 
     // AF pair (accumulator & flags)
-    pub fn get_af(self: *const DmgCpu) u16 {
+    pub fn get_af(self: *const Cpu) u16 {
         return (@as(u16, self.a) << 8) | @as(u16, self.f);
     }
 
-    pub fn set_af(self: *DmgCpu, value: u16) void {
+    pub fn set_af(self: *Cpu, value: u16) void {
         self.a = @truncate(value >> 8);
         // lower 4 bits of F should always be 0
         self.f = @truncate(value & 0xF0);
     }
 
     // BC pair
-    pub fn get_bc(self: *const DmgCpu) u16 {
+    pub fn get_bc(self: *const Cpu) u16 {
         return (@as(u16, self.b) << 8) | @as(u16, self.c);
     }
 
-    pub fn set_bc(self: *DmgCpu, value: u16) void {
+    pub fn set_bc(self: *Cpu, value: u16) void {
         self.b = @truncate(value >> 8);
         self.c = @truncate(value);
     }
 
     // DE pair
-    pub fn get_de(self: *const DmgCpu) u16 {
+    pub fn get_de(self: *const Cpu) u16 {
         return (@as(u16, self.d) << 8) | @as(u16, self.e);
     }
 
-    pub fn set_de(self: *DmgCpu, value: u16) void {
+    pub fn set_de(self: *Cpu, value: u16) void {
         self.d = @truncate(value >> 8);
         self.e = @truncate(value);
     }
 
     // HL pair
     // note: usually used for memory addressing
-    pub fn get_hl(self: *const DmgCpu) u16 {
+    pub fn get_hl(self: *const Cpu) u16 {
         return (@as(u16, self.h) << 8) | @as(u16, self.l);
     }
 
-    pub fn set_hl(self: *DmgCpu, value: u16) void {
+    pub fn set_hl(self: *Cpu, value: u16) void {
         self.h = @truncate(value >> 8);
         self.l = @truncate(value);
     }
 
-    pub fn get_flag(self: *const DmgCpu, mask: u8) bool {
+    pub fn get_flag(self: *const Cpu, mask: u8) bool {
         return (self.f & mask) != 0;
     }
 
-    pub fn set_flag(self: *DmgCpu, mask: u8, condition: bool) void {
+    pub fn set_flag(self: *Cpu, mask: u8, condition: bool) void {
         if (condition) {
             self.f |= mask;
         } else {
@@ -118,7 +114,7 @@ pub const DmgCpu = struct {
 
     /// helper to get a pointer to an 8-bit register based on the 3-bit code
     /// 0=B, 1=C, 2=D, 3=E, 4=H, 5=L, 7=A
-    fn decode_register_ptr(self: *DmgCpu, code: u8) *u8 {
+    fn decode_register_ptr(self: *Cpu, code: u8) *u8 {
         return switch (code) {
             0 => &self.b,
             1 => &self.c,
@@ -133,13 +129,13 @@ pub const DmgCpu = struct {
     }
 
     /// helper to read a 16-bit value (little endian)
-    fn fetch16(self: *DmgCpu) u16 {
+    fn fetch16(self: *Cpu) u16 {
         const low = self.fetch();
         const high = self.fetch();
         return (@as(u16, high) << 8) | @as(u16, low);
     }
 
-    pub fn handle_interrupts(self: *DmgCpu) void {
+    pub fn handle_interrupts(self: *Cpu) void {
         const ie = self.bus.read(0xFFFF);
         const if_reg = self.bus.read(0xFF0F);
 
@@ -190,54 +186,8 @@ pub const DmgCpu = struct {
         }
     }
 
-    pub fn update_timers(self: *DmgCpu, cycles: u16) void {
-        // update DIV
-        // DIV increments at 16384 Hz (every 256 CPU clock cycles)
-        self.div_clock += cycles;
-        while (self.div_clock >= 256) {
-            self.div_clock -= 256;
-            // DIV register is the high byte of the counter
-            self.bus.mem_raw[0xFF04] +%= 1; // wrapping is fine here idk
-        }
-
-        // update TIMA
-        // TIMA only increments if the TAC (timer control) is enabled (on bit 2)
-        const tac = self.bus.mem_raw[0xFF07];
-        const timer_enable = (tac & 0x04) != 0;
-
-        if (timer_enable) {
-            self.tima_clock += cycles;
-
-            // frequency determined by TAC bits 1-0:
-            // 00=4096Hz (1024 cycles), 01=262144Hz (16 cycles), 10=65536Hz (64 cycles), 11=16384Hz (256 cycles)
-            const frequency_cycles: u16 = switch (tac & 0x03) {
-                0 => 1024,
-                1 => 16,
-                2 => 64,
-                3 => 256,
-                else => unreachable,
-            };
-
-            while (self.tima_clock >= frequency_cycles) {
-                self.tima_clock -= frequency_cycles;
-
-                const tima = self.bus.mem_raw[0xFF05];
-
-                // overflow check (255 -> 0)
-                if (tima == 0xFF) {
-                    // set timer interrupt (bit 2 of IF register 0xFF0F)
-                    self.bus.mem_raw[0xFF0F] |= 0x04;
-                    // reset TIMA to TMA (timer modulo, 0xFF06)
-                    self.bus.mem_raw[0xFF05] = self.bus.mem_raw[0xFF06];
-                } else {
-                    self.bus.mem_raw[0xFF05] = tima + 1;
-                }
-            }
-        }
-    }
-
     // handler for CB-prefixed instructions
-    fn step_cb(self: *DmgCpu, opcode: u8) u16 {
+    fn step_cb(self: *Cpu, opcode: u8) u16 {
         // decode register from lower 3 bits (0=B, 1=C, etc.)
         const r_code = opcode & 0b111;
         const is_hl = (r_code == 0b110); // HL or register
@@ -357,7 +307,7 @@ pub const DmgCpu = struct {
 
     /// execute a CPU step
     /// returns cpu count of cycles taken
-    pub fn step(self: *DmgCpu) u16 {
+    pub fn step(self: *Cpu) u16 {
         const opcode: u8 = self.bus.read(self.pc);
 
         // increment pc to point to the next byte
