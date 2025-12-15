@@ -1,6 +1,8 @@
 const std = @import("std");
+const DmgBus = @import("dmg_bus.zig").DmgBus;
 
 pub const DmgCpu = struct {
+    bus: *DmgBus,
     cycles: u128 = 0,
 
     // 8-bit general purpose registers
@@ -23,8 +25,9 @@ pub const DmgCpu = struct {
     pub const FLAG_H: u8 = 0b0010_0000; // half carry flag
     pub const FLAG_C: u8 = 0b0001_0000; // carry flag
 
-    pub fn init() DmgCpu {
+    pub fn init(bus: *DmgBus) DmgCpu {
         return DmgCpu{
+            .bus = bus,
             // initial values based for DMG boot state
             .a = 0x01, // 0x01 for DMG, 0x11 for CGB
             .f = 0xB0,
@@ -37,6 +40,14 @@ pub const DmgCpu = struct {
             .sp = 0xFFFE, // defaults to 0xFFFE on start
             .pc = 0x0100, // entry point usually 0x100
         };
+    }
+
+    /// helper to read an intermediate u8 val
+    fn fetch(self: *DmgCpu) u8 {
+        const val = self.bus.read(self.pc);
+        // note: simpler to increment the PC here
+        self.pc +%= 1;
+        return val;
     }
 
     // --- 16-bit Register Accessors (Pairing) ---
@@ -109,7 +120,7 @@ pub const DmgCpu = struct {
             0x00 => {
                 return 1;
             },
-            
+
             // LD r, r'
             // manual format: 01 r r' (bits 7-6 are '01')
             // range: 0x40 (01 000 000) to 0x7F (01 111 111)
@@ -126,10 +137,10 @@ pub const DmgCpu = struct {
                 }
 
                 // note: will need to handle (HL) separately for full support
-                
-                const val = if (src_code == 0b110) 
+
+                const val = if (src_code == 0b110)
                     self.bus.read(self.cpu.get_hl()) // read mem at (HL)
-                else 
+                else
                     self.decode_register_ptr(src_code).*; // read register
 
                 if (dest_code == 0b110) {
@@ -137,7 +148,7 @@ pub const DmgCpu = struct {
                 } else {
                     self.decode_register_ptr(dest_code).* = val; // write register
                 }
-                
+
                 return 1;
             },
 
@@ -147,7 +158,7 @@ pub const DmgCpu = struct {
             0x06, 0x0E, 0x16, 0x1E, 0x26, 0x2E, 0x3E => {
                 const dest_code = (opcode >> 3) & 0b111;
                 const n = self.fetch(); // load immediate value (n)
-                
+
                 if (dest_code == 0b110) { // LD (HL), n
                     self.bus.write(self.cpu.get_hl(), n);
                     return 3; // memory write takes longer
@@ -161,7 +172,7 @@ pub const DmgCpu = struct {
             else => {
                 std.debug.print("Unknown Opcode: 0x{x:0>2}\n", .{opcode});
                 return 0;
-            }
+            },
         }
     }
 };
