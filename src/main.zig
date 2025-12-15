@@ -7,7 +7,23 @@ const DmgCpu = @import("dmg_cpu.zig").DmgCpu;
 const _ppu = @import("dmg_ppu.zig");
 const DmgPpu = _ppu.DmgPpu;
 
+// yes, the Game Boy ran at (almost) 60 FPS
 const TARGET_FRAME_TIME_MS = 1000 / 60;
+
+fn getRainbowColor() u32 {
+    const t = @as(f32, @floatFromInt(SDL.SDL_GetTicks()));
+    const speed = 0.002;
+
+    // calculate RGB using sine waves phase-shifted by 120 degrees (2pi/3)
+    // we multiply by 127 and add 128 to keep values between 1 and 255
+    // i found this on SO ofc
+    const r: u32 = @intFromFloat(std.math.sin(speed * t) * 127.0 + 128.0);
+    const g: u32 = @intFromFloat(std.math.sin(speed * t + (2.0 * std.math.pi / 3.0)) * 127.0 + 128.0);
+    const b: u32 = @intFromFloat(std.math.sin(speed * t + (4.0 * std.math.pi / 3.0)) * 127.0 + 128.0);
+
+    // combine into 0xAARRGGBB format
+    return (0xFF << 24) | (r << 16) | (g << 8) | b;
+}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -85,7 +101,7 @@ pub fn main() !void {
         step_frame(&cpu, &ppu);
 
         // debugging render
-        const debug_color: u32 = if ((SDL.SDL_GetTicks() % 2) < 1) 0xFFFF0000 else 0xFF0000FF;
+        const debug_color = getRainbowColor();
         for (0..2) |y| {
             for (0..2) |x| {
                 ppu.video_buffer[(y * _ppu.SCREEN_WIDTH) + x] = debug_color;
@@ -103,7 +119,8 @@ pub fn main() !void {
         const end_time = SDL.SDL_GetTicks();
         const elapsed = end_time - start_time;
 
-        std.debug.print("DEBUG: time to render: {d}\n", .{elapsed});
+        if (elapsed > TARGET_FRAME_TIME_MS)
+            std.debug.print("WARNING: render took {d}ms (> {d}ms)\n", .{ elapsed, TARGET_FRAME_TIME_MS });
     }
 }
 
