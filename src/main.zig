@@ -88,13 +88,6 @@ pub fn main() !void {
             }
         }
 
-        if ((SDL.SDL_GetTicks() % 1000) < 500) {
-            const lcdc = bus.read(0xFF40);
-            const bgp = bus.read(0xFF47);
-            const ly = bus.read(0xFF44);
-            std.debug.print("DEBUG: LCDC={b:0>8} BGP={b:0>8} LY={d}\n", .{ lcdc, bgp, ly });
-        }
-
         _ = SDL.SDL_UpdateTexture(texture, null, @ptrCast(&ppu.video_buffer), _ppu.SCREEN_WIDTH * @sizeOf(u32));
         _ = SDL.SDL_SetRenderDrawColor(renderer, 0x11, 0x11, 0x11, 0xFF);
         _ = SDL.SDL_RenderClear(renderer);
@@ -104,7 +97,7 @@ pub fn main() !void {
         SDL.SDL_RenderPresent(renderer);
 
         // tmp simple delay to avoid going too fast
-        SDL.SDL_Delay(16);
+        // SDL.SDL_Delay(16);
     }
 }
 

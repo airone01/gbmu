@@ -168,6 +168,7 @@ pub const DmgCpu = struct {
             var bit: u8 = 0;
 
             if ((pending & 0x01) != 0) { // VBlank
+                std.debug.print("DEBUG: VBlank Interrupt Triggered! Jumping to 0x0040\n", .{});
                 vector = 0x0040;
                 bit = 0x01;
             } else if ((pending & 0x02) != 0) { // LCD stat
@@ -958,6 +959,16 @@ pub const DmgCpu = struct {
                 self.f = if (self.a == 0) FLAG_Z else 0;
 
                 return if (src_code == 0b110) 2 else 1;
+            },
+
+            // XOR n (A with immediate value n)
+            0xEE => {
+                const n = self.fetch();
+                self.a = self.a ^ n;
+
+                // flags: Z, N=0, H=0, C=0
+                self.f = if (self.a == 0) FLAG_Z else 0;
+                return 2;
             },
 
             // AND r (Bitwise AND A with r)

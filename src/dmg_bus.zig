@@ -119,7 +119,12 @@ pub const DmgBus = struct {
             },
 
             // HRAM & IE
-            0xFF80...0xFFFF => self.mem_raw[addr] = value,
+            0xFF80...0xFFFF => {
+                if (addr == 0xFFFF) {
+                    std.debug.print("DEBUG: Game wrote 0x{X:0>2} to IE (Interrupt Enable)\n", .{value});
+                }
+                self.mem_raw[addr] = value;
+            },
         }
     }
 
