@@ -412,9 +412,9 @@ pub const DmgCpu = struct {
                     else => unreachable,
                 };
 
-                self.sp -= 1;
+                self.sp -%= 1;
                 self.bus.write(self.sp, @truncate(val >> 8));
-                self.sp -= 1;
+                self.sp -%= 1;
                 self.bus.write(self.sp, @truncate(val));
                 return 4;
             },
@@ -422,9 +422,9 @@ pub const DmgCpu = struct {
             // POP qq (pop 16-bit register)
             0xC1, 0xD1, 0xE1, 0xF1 => {
                 const low = self.bus.read(self.sp);
-                self.sp += 1;
+                self.sp +%= 1;
                 const high = self.bus.read(self.sp);
-                self.sp += 1;
+                self.sp +%= 1;
                 const val = (@as(u16, high) << 8) | @as(u16, low);
 
                 switch (opcode) {
@@ -863,9 +863,9 @@ pub const DmgCpu = struct {
             0xCD => {
                 const target = self.fetch16();
                 // push current PC (next instruction) onto stack
-                self.sp -= 1;
+                self.sp -%= 1;
                 self.bus.write(self.sp, @truncate(self.pc >> 8)); // high byte
-                self.sp -= 1;
+                self.sp -%= 1;
                 self.bus.write(self.sp, @truncate(self.pc)); // low byte
 
                 self.pc = target;
@@ -915,9 +915,9 @@ pub const DmgCpu = struct {
             // RET (return from subroutine)
             0xC9 => {
                 const low = self.bus.read(self.sp);
-                self.sp += 1;
+                self.sp +%= 1;
                 const high = self.bus.read(self.sp);
-                self.sp += 1;
+                self.sp +%= 1;
 
                 self.pc = (@as(u16, high) << 8) | @as(u16, low);
                 return 4;
@@ -1211,9 +1211,9 @@ pub const DmgCpu = struct {
             // RETI (Return and Enable Interrupts)
             0xD9 => {
                 const low = self.bus.read(self.sp);
-                self.sp += 1;
+                self.sp +%= 1;
                 const high = self.bus.read(self.sp);
-                self.sp += 1;
+                self.sp +%= 1;
 
                 self.pc = (@as(u16, high) << 8) | @as(u16, low);
                 self.ime = true;
