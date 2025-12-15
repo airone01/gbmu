@@ -81,7 +81,7 @@ pub const DmgPpu = struct {
     fn render_scanline(self: *DmgPpu, ly: u8) void {
         const lcdc = self.bus.mem_raw[0xFF40];
 
-        if ((lcdc & 0x01) == 0) return; // bit 0 is BG display yes/no
+        if ((lcdc & 0x01) == 0) return; // BG display?
 
         const scy = self.bus.mem_raw[0xFF42]; // scroll Y
         const scx = self.bus.mem_raw[0xFF43]; // scroll X
@@ -138,6 +138,81 @@ pub const DmgPpu = struct {
             // write to buffer
             const pixel_index = (@as(usize, ly) * SCREEN_WIDTH) + x;
             self.video_buffer[pixel_index] = PALETTE[real_color];
+        }
+
+        if ((lcdc & 0x02) == 0) return; // OBJ display?
+
+        // bit 2: OBJ size (0=8x8, 1=8x16)
+        const use_8x16 = (lcdc & 0x04) != 0;
+        const sprite_height: u8 = if (use_8x16) 16 else 8;
+
+        // OAM is at 0xFE00. there are 40 sprites (4 bytes each).
+        // we iterate backwards to handle priority simplisticly (or standard order)
+        // Game Boy can only draw 10 sprites per line, but for simplicity's sake
+        // we just check them all.
+        for (0..40) |i| {
+            // OAM Layout:
+            // byte 0: Y position + 16
+            // byte 1: X position + 8
+            // byte 2: tile index
+            // byte 3: attributes / flags
+            const addr = 0xFE00 + (@as(u16, @intCast(i)) * 4);
+
+            const sprite_y = self.bus.mem_raw[addr] -% 16;
+            const sprite_x = self.bus.mem_raw[addr + 1] -% 8;
+            var tile_index = self.bus.mem_raw[addr + 2];
+            const flags = self.bus.mem_raw[addr + 3];
+
+            // is this sprite on the current scanline (ly)?
+            if (ly >= sprite_y and ly < (sprite_y + sprite_height)) {
+                var line_in_sprite = ly - sprite_y; // which line of the sprite to draw (0-7 or 0-15)
+
+                // handle Y-flip (Bit 6)
+                if ((flags & 0x40) != 0) {
+                    line_in_sprite = sprite_height - 1 - line_in_sprite;
+                }
+
+                // for 8x16 sprites, tile index lowest bit is ignored
+                if (use_8x16) tile_index &= 0xFE;
+
+                const tile_addr = 0x8000 + (@as(u16, tile_index) * 16);
+                const byte1 = self.bus.read(tile_addr + (line_in_sprite * 2));
+                const byte2 = self.bus.read(tile_addr + (line_in_sprite * 2) + 1);
+
+                // palette: bit 4 (0=OBP0 at 0xFF48, 1=OBP1 at 0xFF49)
+                const palette_reg: u16 = if ((flags & 0x10) != 0) 0xFF49 else 0xFF48;
+                const palette_data = self.bus.mem_raw[palette_reg];
+
+                // iterate over the 8 pixels in this row
+                // iterate backwards to map bit 7 to x2=0
+                var x2: u8 = 0; // "x2" bc shadowing
+                while (x2 < 8) : (x2 += 1) {
+                    // screen X coordinate
+                    const pixel_x = sprite_x +% x2;
+                    if (pixel_x >= SCREEN_WIDTH) continue; // boundary
+
+                    // handle X-Flip (bit 5)
+                    const bit_index = if ((flags & 0x20) != 0) x2 else (7 - x2);
+
+                    const bit_lo = (byte1 >> @intCast(bit_index)) & 1;
+                    const bit_hi = (byte2 >> @intCast(bit_index)) & 1;
+                    const color_id = (bit_hi << 1) | bit_lo;
+
+                    // color 0 is transparent for sprites
+                    if (color_id == 0) continue;
+
+                    // priority (bit 7): 0=above BG, 1=behind non-zero BG colors
+                    // TODO for now we just draw on top but eventually complex drawing logic
+                    // could be good here
+
+                    // decode color from Palette
+                    const palette_shift = @as(u3, @intCast(color_id * 2));
+                    const real_color = (palette_data >> palette_shift) & 0x03;
+
+                    const pixel_idx = (@as(usize, ly) * SCREEN_WIDTH) + pixel_x;
+                    self.video_buffer[pixel_idx] = PALETTE[real_color];
+                }
+            }
         }
     }
 };

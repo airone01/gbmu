@@ -8,7 +8,7 @@ pub const DmgBus = struct {
     /// we access it with methods
     mem_raw: [mem_bytes]u8 = undefined,
 
-    boot_rom_enabled: bool = true,
+    boot_rom_enabled: bool = true, // dk if I will implement it
 
     pub fn init() DmgBus {
         return DmgBus{
