@@ -22,7 +22,6 @@ pub fn main() !void {
 
     const rom_path = args[1];
 
-    std.debug.print("loading ROM...\n", .{});
     const file = try std.fs.cwd().openFile(rom_path, .{});
     defer file.close();
 
@@ -38,6 +37,7 @@ pub fn main() !void {
 
     var bus = DmgBus.init();
     bus.load_rom(rom_buffer);
+    std.debug.print("loaded ROM '{s}'\n", .{args[1]});
 
     var cpu = DmgCpu.init(&bus);
     var ppu = DmgPpu.init(&bus);
@@ -80,14 +80,31 @@ pub fn main() !void {
 
         step_frame(&cpu, &ppu);
 
+        // debugging render
+        const debug_color: u32 = if ((SDL.SDL_GetTicks() % 1000) < 500) 0xFFFF0000 else 0xFF0000FF;
+        for (0..2) |y| {
+            for (0..2) |x| {
+                ppu.video_buffer[(y * _ppu.SCREEN_WIDTH) + x] = debug_color;
+            }
+        }
+
+        if ((SDL.SDL_GetTicks() % 1000) < 500) {
+            const lcdc = bus.read(0xFF40);
+            const bgp = bus.read(0xFF47);
+            const ly = bus.read(0xFF44);
+            std.debug.print("DEBUG: LCDC={b:0>8} BGP={b:0>8} LY={d}\n", .{ lcdc, bgp, ly });
+        }
+
         _ = SDL.SDL_UpdateTexture(texture, null, @ptrCast(&ppu.video_buffer), _ppu.SCREEN_WIDTH * @sizeOf(u32));
         _ = SDL.SDL_SetRenderDrawColor(renderer, 0x11, 0x11, 0x11, 0xFF);
         _ = SDL.SDL_RenderClear(renderer);
         // scale to window size auto
         _ = SDL.SDL_RenderCopy(renderer, texture, null, null);
 
+        SDL.SDL_RenderPresent(renderer);
+
         // tmp simple delay to avoid going too fast
-        SDL.SDL_Delay(16);
+        // SDL.SDL_Delay(16);
     }
 }
 

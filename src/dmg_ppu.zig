@@ -3,7 +3,12 @@ const DmgBus = @import("dmg_bus.zig").DmgBus;
 
 pub const SCREEN_WIDTH = 160;
 pub const SCREEN_HEIGHT = 144;
-const PALETTE = [_]u32{ 0xE0F8D0, 0x88C070, 0x346856, 0x081820 };
+const PALETTE = [_]u32{ 
+        0xFFE0F8D0, // White
+        0xFF88C070, // Light Gray
+        0xFF346856, // Dark Gray
+        0xFF081820  // Black
+    };
 
 pub const DmgPpu = struct {
     bus: *DmgBus,

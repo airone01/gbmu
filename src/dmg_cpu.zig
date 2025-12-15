@@ -148,6 +148,7 @@ pub const DmgCpu = struct {
 
         // if halted, any interrupt wakes the CPU
         if (self.halted) {
+            std.debug.print("CPU woke up\n", .{});
             self.halted = false;
         }
 
@@ -156,9 +157,9 @@ pub const DmgCpu = struct {
             self.ime = false; // disable further interrupts
 
             // push PC to stack
-            self.sp -= 1;
+            self.sp -%= 1;
             self.bus.write(self.sp, @truncate(self.pc >> 8));
-            self.sp -= 1;
+            self.sp -%= 1;
             self.bus.write(self.sp, @truncate(self.pc));
 
             // jump to vector and clear IF bit
@@ -360,7 +361,7 @@ pub const DmgCpu = struct {
         const opcode: u8 = self.bus.read(self.pc);
 
         // increment pc to point to the next byte
-        self.pc += 1;
+        self.pc +%= 1;
 
         switch (opcode) {
             0x00 => {
@@ -501,6 +502,33 @@ pub const DmgCpu = struct {
                 const c_flag = if (@as(u16, a_val) + @as(u16, val) + @as(u16, carry) > 0xFF) FLAG_C else 0;
 
                 self.f = z_flag | h_flag | c_flag;
+                return if (src_code == 0b110) 2 else 1;
+            },
+
+            // SBC A, r (subtract with carry)
+            0x98...0x9F => {
+                const src_code = opcode & 0b111;
+                const val = if (src_code == 0b110)
+                    self.bus.read(self.get_hl())
+                else
+                    self.decode_register_ptr(src_code).*;
+
+                const carry = if ((self.f & FLAG_C) != 0) @as(u8, 1) else 0;
+                const a_val = self.a;
+                const result = a_val -% val -% carry;
+
+                self.a = result;
+
+                const z_flag = if (result == 0) FLAG_Z else 0;
+                // H: set if borrow from bit 4
+                // (a & 0xF) < (val & 0xF) + c
+                const h_flag = if ((a_val & 0x0F) < (val & 0x0F) + carry) FLAG_H else 0;
+                // C: set if borrow (result > a_val would imply underflow, but stricter check needed)
+                // use larger type to check for true underflow
+                const c_flag = if (@as(u16, a_val) < (@as(u16, val) + @as(u16, carry))) FLAG_C else 0;
+
+                self.f = z_flag | FLAG_N | h_flag | c_flag;
+
                 return if (src_code == 0b110) 2 else 1;
             },
 
@@ -675,41 +703,6 @@ pub const DmgCpu = struct {
                 return 4;
             },
 
-            // DEC r (decrement 8-bit Register)
-            // manual Format: 00 r 101
-            0x05, 0x0D, 0x15, 0x1D, 0x25, 0x2D, 0x3D => {
-                const target_code = (opcode >> 3) & 0b111;
-                const ptr = self.decode_register_ptr(target_code);
-
-                const original = ptr.*;
-                const result = original -% 1;
-                ptr.* = result;
-
-                // flags: Z (set if 0), N=1 (Subtract), H (half carry), C (not affected)
-                const z_flag = if (result == 0) FLAG_Z else 0;
-                const n_flag = FLAG_N; // always set for DEC
-                // half carry: set if borrow from bit 4. (original & 0xF) == 0 means result will wrap 0->F
-                const h_flag = if ((original & 0x0F) == 0) FLAG_H else 0;
-
-                // preserve C flag
-                self.f = (self.f & FLAG_C) | z_flag | n_flag | h_flag;
-
-                return 1;
-            },
-
-            // DEC ss (decrement 16-bit register)
-            0x0B, 0x1B, 0x2B, 0x3B => {
-                const target_code = (opcode >> 4) & 0b11;
-                switch (target_code) {
-                    0 => self.set_bc(self.get_bc() -% 1),
-                    1 => self.set_de(self.get_de() -% 1),
-                    2 => self.set_hl(self.get_hl() -% 1),
-                    3 => self.sp -%= 1,
-                    else => unreachable,
-                }
-                return 2;
-            },
-
             // JP nn (jump absolute)
             0xC3 => {
                 const target = self.fetch16();
@@ -735,6 +728,13 @@ pub const DmgCpu = struct {
                 } else {
                     return 3;
                 }
+            },
+
+            // JP (HL) (jump to address in HL)
+            // note: this loads PC with the value OF the register HL but it does NOT read memory AT HL
+            0xE9 => {
+                self.pc = self.get_hl();
+                return 1;
             },
 
             // JR n (jump relative)
@@ -777,6 +777,31 @@ pub const DmgCpu = struct {
 
                 self.pc = target;
                 return 6;
+            },
+
+            // CALL cc, nn (conditional call)
+            0xC4, 0xCC, 0xD4, 0xDC => {
+                const target = self.fetch16();
+
+                const condition = switch (opcode) {
+                    0xC4 => !self.get_flag(FLAG_Z), // NZ
+                    0xCC => self.get_flag(FLAG_Z), // Z
+                    0xD4 => !self.get_flag(FLAG_C), // NC
+                    0xDC => self.get_flag(FLAG_C), // C
+                    else => unreachable,
+                };
+
+                if (condition) {
+                    self.sp -%= 1;
+                    self.bus.write(self.sp, @truncate(self.pc >> 8));
+                    self.sp -%= 1;
+                    self.bus.write(self.sp, @truncate(self.pc));
+
+                    self.pc = target;
+                    return 6;
+                } else {
+                    return 3;
+                }
             },
 
             // RET (return from subroutine)
@@ -829,13 +854,20 @@ pub const DmgCpu = struct {
                 return if (src_code == 0b110) 2 else 1;
             },
 
-            // XOR A OR (accumulator with itself)
-            // common shortcut to set A = 0
-            0xAF => {
-                self.a = self.a ^ self.a; // always 0
-                // flags: Z=1, N=0, H=0, C=0
-                self.f = FLAG_Z;
-                return 1;
+            // XOR r (A with register r)
+            0xA8...0xAF => {
+                const src_code = opcode & 0b111;
+                const val = if (src_code == 0b110)
+                    self.bus.read(self.get_hl())
+                else
+                    self.decode_register_ptr(src_code).*;
+
+                self.a = self.a ^ val;
+
+                // flags: Z, N=0, H=0, C=0
+                self.f = if (self.a == 0) FLAG_Z else 0;
+
+                return if (src_code == 0b110) 2 else 1;
             },
 
             // AND r (Bitwise AND A with r)
@@ -897,6 +929,72 @@ pub const DmgCpu = struct {
                 return 2;
             },
 
+            // INC (HL) (increment value at memory address HL)
+            0x34 => {
+                const addr = self.get_hl();
+                const original = self.bus.read(addr);
+                const result = original +% 1;
+                self.bus.write(addr, result);
+
+                // flags: Z, N=0, H, C=preserved
+                const z_flag = if (result == 0) FLAG_Z else 0;
+                const h_flag = if ((original & 0x0F) == 0x0F) FLAG_H else 0; // half carry if lower nibble wraps
+
+                self.f = (self.f & FLAG_C) | z_flag | h_flag; // N is cleared
+                return 3;
+            },
+
+            // DEC r (decrement 8-bit Register)
+            // manual Format: 00 r 101
+            0x05, 0x0D, 0x15, 0x1D, 0x25, 0x2D, 0x3D => {
+                const target_code = (opcode >> 3) & 0b111;
+                const ptr = self.decode_register_ptr(target_code);
+
+                const original = ptr.*;
+                const result = original -% 1;
+                ptr.* = result;
+
+                // flags: Z (set if 0), N=1 (Subtract), H (half carry), C (not affected)
+                const z_flag = if (result == 0) FLAG_Z else 0;
+                const n_flag = FLAG_N; // always set for DEC
+                // half carry: set if borrow from bit 4. (original & 0xF) == 0 means result will wrap 0->F
+                const h_flag = if ((original & 0x0F) == 0) FLAG_H else 0;
+
+                // preserve C flag
+                self.f = (self.f & FLAG_C) | z_flag | n_flag | h_flag;
+
+                return 1;
+            },
+
+            // DEC ss (decrement 16-bit register)
+            0x0B, 0x1B, 0x2B, 0x3B => {
+                const target_code = (opcode >> 4) & 0b11;
+                switch (target_code) {
+                    0 => self.set_bc(self.get_bc() -% 1),
+                    1 => self.set_de(self.get_de() -% 1),
+                    2 => self.set_hl(self.get_hl() -% 1),
+                    3 => self.sp -%= 1,
+                    else => unreachable,
+                }
+                return 2;
+            },
+
+            // DEC (HL) (decrement value at memory address HL)
+            0x35 => {
+                const addr = self.get_hl();
+                const original = self.bus.read(addr);
+                const result = original -% 1;
+                self.bus.write(addr, result);
+
+                // flags: Z, N=1, H (borrow from bit 4), C=preserved
+                const z_flag = if (result == 0) FLAG_Z else 0;
+                // half carry check for decrement: set if lower nibble was 0
+                const h_flag = if ((original & 0x0F) == 0) FLAG_H else 0;
+
+                self.f = (self.f & FLAG_C) | z_flag | FLAG_N | h_flag;
+                return 3;
+            },
+
             // CB Prefix (extended operations)
             0xCB => {
                 const cb_op = self.fetch();
@@ -918,6 +1016,15 @@ pub const DmgCpu = struct {
 
                 self.f = z_flag | n_flag | h_flag | c_flag;
                 return 2;
+            },
+
+            // CPL (complement A)
+            // flip all bits in A (One's Complement)
+            0x2F => {
+                self.a = ~self.a;
+                // flags: Z=preserved, N=1, H=1, C=preserved
+                self.f = (self.f & (FLAG_Z | FLAG_C)) | FLAG_N | FLAG_H;
+                return 1;
             },
 
             // SUB r (subtract register r from A)
