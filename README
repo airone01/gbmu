@@ -7,4 +7,5 @@ Notes
 -----
 
 * Boot ROMs: https://gbdev.gg8.se/files/roms/bootroms/
+* Optimize memory: `-Doptimize=ReleaseSafe` (or `ReleaseFast`)
 

@@ -168,7 +168,6 @@ pub const DmgCpu = struct {
             var bit: u8 = 0;
 
             if ((pending & 0x01) != 0) { // VBlank
-                std.debug.print("DEBUG: VBlank Interrupt Triggered! Jumping to 0x0040\n", .{});
                 vector = 0x0040;
                 bit = 0x01;
             } else if ((pending & 0x02) != 0) { // LCD stat
@@ -566,6 +565,25 @@ pub const DmgCpu = struct {
                 return if (src_code == 0b110) 2 else 1;
             },
 
+            // SBC A, n (subtract immediate n + carry from A)
+            0xDE => {
+                const n = self.fetch();
+                const carry = if ((self.f & FLAG_C) != 0) @as(u8, 1) else 0;
+                const a_val = self.a;
+                const result = a_val -% n -% carry;
+
+                self.a = result;
+
+                const z_flag = if (result == 0) FLAG_Z else 0;
+                // H: set if borrow from bit 4
+                const h_flag = if ((a_val & 0x0F) < (n & 0x0F) + carry) FLAG_H else 0;
+                // C: set if borrow (underflow)
+                const c_flag = if (@as(u16, a_val) < (@as(u16, n) + @as(u16, carry))) FLAG_C else 0;
+
+                self.f = z_flag | FLAG_N | h_flag | c_flag;
+                return 2;
+            },
+
             // DAA (decimal adjust accumulator)
             0x27 => {
                 var a_val = self.a;
@@ -647,7 +665,6 @@ pub const DmgCpu = struct {
 
             // LD r, n
             // manual format: 00 r 110 (bits 7-6 '00', bits 2-0 '110')
-            // specific opcodes: 0x06, 0x0E, 0x16, 0x1E, 0x26, 0x2E, 0x3E
             0x06, 0x0E, 0x16, 0x1E, 0x26, 0x2E, 0x3E => {
                 const dest_code = (opcode >> 3) & 0b111;
                 const n = self.fetch(); // load immediate value (n)
@@ -928,7 +945,7 @@ pub const DmgCpu = struct {
                 }
             },
 
-            // OR r (logical OR A with register r)
+            // OR r (A with register r)
             0xB0...0xB7 => {
                 const src_code = opcode & 0b111;
                 const val = if (src_code == 0b110)
@@ -943,6 +960,16 @@ pub const DmgCpu = struct {
                 self.f = z_flag; // clears N, H, C automatically
 
                 return if (src_code == 0b110) 2 else 1;
+            },
+
+            // OR n (A with immediate value n)
+            0xF6 => {
+                const n = self.fetch();
+                self.a |= n;
+
+                // Z=1 if result is 0, N=0, H=0, C=0
+                self.f = if (self.a == 0) FLAG_Z else 0;
+                return 2;
             },
 
             // XOR r (A with register r)
@@ -1150,6 +1177,23 @@ pub const DmgCpu = struct {
                 return if (src_code == 0b110) 2 else 1;
             },
 
+            // SUB n (Subtract immediate value n from A)
+            0xD6 => {
+                const n = self.fetch();
+                const a_val = self.a;
+                const result = a_val -% n;
+                self.a = result;
+
+                const z_flag = if (result == 0) FLAG_Z else 0;
+                // half carry: set if borrow from bit 4
+                const h_flag = if ((a_val & 0x0F) < (n & 0x0F)) FLAG_H else 0;
+                // carry: set if borrow (A < n)
+                const c_flag = if (a_val < n) FLAG_C else 0;
+
+                self.f = z_flag | FLAG_N | h_flag | c_flag; // N is set
+                return 2;
+            },
+
             // EI (Enable Interrupts)
             0xFB => {
                 // note: irl hardware enables interrupts after the next instruction not during this one
@@ -1205,7 +1249,7 @@ pub const DmgCpu = struct {
 
             // fallback for unimplemented opcodes
             else => {
-                std.debug.print("Unknown opcode: 0x{x:0>2}\n", .{opcode});
+                std.debug.print("DEBGU: Unknown opcode '0x{x:0>2}'\n", .{opcode});
                 return 0;
             },
         }

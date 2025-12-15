@@ -7,6 +7,8 @@ const DmgCpu = @import("dmg_cpu.zig").DmgCpu;
 const _ppu = @import("dmg_ppu.zig");
 const DmgPpu = _ppu.DmgPpu;
 
+const TARGET_FRAME_TIME_MS = 1000 / 60;
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -56,7 +58,7 @@ pub fn main() !void {
     ) orelse sdl_panic();
     defer _ = SDL.SDL_DestroyWindow(window);
 
-    const renderer = SDL.SDL_CreateRenderer(window, -1, SDL.SDL_RENDERER_ACCELERATED) orelse sdl_panic();
+    const renderer = SDL.SDL_CreateRenderer(window, -1, SDL.SDL_RENDERER_ACCELERATED | SDL.SDL_RENDERER_PRESENTVSYNC) orelse sdl_panic();
     defer _ = SDL.SDL_DestroyRenderer(renderer);
 
     const texture = SDL.SDL_CreateTexture( // GB screen texture
@@ -70,6 +72,8 @@ pub fn main() !void {
 
     var running = true;
     while (running) {
+        const start_time = SDL.SDL_GetTicks();
+
         var ev: SDL.SDL_Event = undefined;
         while (SDL.SDL_PollEvent(&ev) != 0) {
             switch (ev.type) {
@@ -81,7 +85,7 @@ pub fn main() !void {
         step_frame(&cpu, &ppu);
 
         // debugging render
-        const debug_color: u32 = if ((SDL.SDL_GetTicks() % 1000) < 500) 0xFFFF0000 else 0xFF0000FF;
+        const debug_color: u32 = if ((SDL.SDL_GetTicks() % 2) < 1) 0xFFFF0000 else 0xFF0000FF;
         for (0..2) |y| {
             for (0..2) |x| {
                 ppu.video_buffer[(y * _ppu.SCREEN_WIDTH) + x] = debug_color;
@@ -96,8 +100,10 @@ pub fn main() !void {
 
         SDL.SDL_RenderPresent(renderer);
 
-        // tmp simple delay to avoid going too fast
-        // SDL.SDL_Delay(16);
+        const end_time = SDL.SDL_GetTicks();
+        const elapsed = end_time - start_time;
+
+        std.debug.print("DEBUG: time to render: {d}\n", .{elapsed});
     }
 }
 
