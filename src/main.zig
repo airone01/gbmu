@@ -1,9 +1,11 @@
 const std = @import("std");
 
+const SDL = @import("sdl2");
+
 const DmgBus = @import("dmg_bus.zig").DmgBus;
 const DmgCpu = @import("dmg_cpu.zig").DmgCpu;
-const DmgPpu = @import("dmg_ppu.zig").DmgPpu;
-const SDL = @import("sdl2");
+const _ppu = @import("dmg_ppu.zig");
+const DmgPpu = _ppu.DmgPpu;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -57,6 +59,15 @@ pub fn main() !void {
     const renderer = SDL.SDL_CreateRenderer(window, -1, SDL.SDL_RENDERER_ACCELERATED) orelse sdl_panic();
     defer _ = SDL.SDL_DestroyRenderer(renderer);
 
+    const texture = SDL.SDL_CreateTexture( // GB screen texture
+        renderer,
+        SDL.SDL_PIXELFORMAT_ARGB8888,
+        SDL.SDL_TEXTUREACCESS_STREAMING,
+        _ppu.SCREEN_WIDTH,
+        _ppu.SCREEN_HEIGHT,
+    ) orelse sdl_panic();
+    defer SDL.SDL_DestroyTexture(texture);
+
     var running = true;
     while (running) {
         var ev: SDL.SDL_Event = undefined;
@@ -69,10 +80,11 @@ pub fn main() !void {
 
         step_frame(&cpu, &ppu);
 
-        // placeholder rendering
-        _ = SDL.SDL_SetRenderDrawColor(renderer, 0xF7, 0xA4, 0x1D, 0xFF);
+        _ = SDL.SDL_UpdateTexture(texture, null, @ptrCast(&ppu.video_buffer), _ppu.SCREEN_WIDTH * @sizeOf(u32));
+        _ = SDL.SDL_SetRenderDrawColor(renderer, 0x11, 0x11, 0x11, 0xFF);
         _ = SDL.SDL_RenderClear(renderer);
-        SDL.SDL_RenderPresent(renderer);
+        // scale to window size auto
+        _ = SDL.SDL_RenderCopy(renderer, texture, null, null);
 
         // tmp simple delay to avoid going too fast
         SDL.SDL_Delay(16);
