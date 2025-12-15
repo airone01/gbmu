@@ -52,6 +52,10 @@ pub const DmgBus = struct {
 
             // IO registers
             0xFF00...0xFF7F => {
+                // note: 0 is the state of pressed buttons, and 0XFF unpressed,
+                // so we have to return 0xFF case so buttons are not considered
+                // to be pressed when starting a game
+                if (addr == 0xFF00) return 0xFF;
                 // TODO special read logic needed here later (P1, DIV, LY ...)
                 return self.mem_raw[addr];
             },
