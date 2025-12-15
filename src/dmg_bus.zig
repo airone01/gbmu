@@ -105,6 +105,12 @@ pub const DmgBus = struct {
                     return;
                 }
 
+                // LY (0xFF44) is read-only
+                // games might write to it to reset it
+                // for now, ignoring writes is safe.
+                // TODO
+                if (addr == 0xFF44) return;
+
                 self.mem_raw[addr] = value;
             },
 

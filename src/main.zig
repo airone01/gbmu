@@ -2,6 +2,7 @@ const std = @import("std");
 
 const DmgBus = @import("dmg_bus.zig").DmgBus;
 const DmgCpu = @import("dmg_cpu.zig").DmgCpu;
+const DmgPpu = @import("dmg_ppu.zig").DmgPpu;
 const SDL = @import("sdl2");
 
 pub fn main() !void {
@@ -37,6 +38,7 @@ pub fn main() !void {
     bus.load_rom(rom_buffer);
 
     var cpu = DmgCpu.init(&bus);
+    var ppu = DmgPpu.init(&bus);
 
     if (SDL.SDL_Init(SDL.SDL_INIT_VIDEO | SDL.SDL_INIT_EVENTS | SDL.SDL_INIT_AUDIO) < 0)
         sdl_panic();
@@ -65,7 +67,7 @@ pub fn main() !void {
             }
         }
 
-        step_frame(&cpu);
+        step_frame(&cpu, &ppu);
 
         // placeholder rendering
         _ = SDL.SDL_SetRenderDrawColor(renderer, 0xF7, 0xA4, 0x1D, 0xFF);
@@ -84,7 +86,7 @@ fn sdl_panic() noreturn {
 
 const MAX_CYCLES_PER_FRAME = 70224;
 
-fn step_frame(cpu: *DmgCpu) void {
+fn step_frame(cpu: *DmgCpu, ppu: *DmgPpu) void {
     // cycles taken for the whole fame
     var frame_cycles: u32 = 0; // u32 > MAX_CYCLES_PER_FRAME
 
@@ -95,7 +97,7 @@ fn step_frame(cpu: *DmgCpu) void {
 
         // then we sync hardware depending on how much time we took
         // update_timers(cycles);
-        // update_graphics(cycles);
+        ppu.step(cycles);
         // handle_interrupts();
         // ... or something like that
 
