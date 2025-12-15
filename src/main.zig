@@ -22,7 +22,7 @@ pub fn main() !void {
 
     const rom_path = args[1];
 
-    std.debug.print("loading ROM...", .{});
+    std.debug.print("loading ROM...\n", .{});
     const file = try std.fs.cwd().openFile(rom_path, .{});
     defer file.close();
 
@@ -114,11 +114,8 @@ fn step_frame(cpu: *DmgCpu, ppu: *DmgPpu) void {
             cycles_taken = cpu.step() * 4;
         }
 
-        // then we sync hardware depending on how much time we took
-        // update_timers(cycles_taken);
         ppu.step(cycles_taken);
-        // handle_interrupts();
-        // ... or something like that
+        cpu.update_timers(cycles_taken);
 
         frame_cycles += cycles_taken;
     }

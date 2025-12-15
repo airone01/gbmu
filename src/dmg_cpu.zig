@@ -6,6 +6,8 @@ pub const DmgCpu = struct {
     cycles: u128 = 0,
     ime: bool = false, // interrupt master enable
     halted: bool = false, // CPU halted state
+    div_clock: u16 = 0,
+    tima_clock: u16 = 0,
 
     // 8-bit general purpose registers
     a: u8, // accumulator
@@ -32,6 +34,8 @@ pub const DmgCpu = struct {
             .bus = bus,
             .ime = false,
             .halted = false,
+            .div_clock = 0,
+            .tima_clock = 0,
             // initial values based for DMG boot state
             .a = 0x01, // 0x01 for DMG, 0x11 for CGB
             .f = 0xB0,
@@ -182,6 +186,52 @@ pub const DmgCpu = struct {
             self.pc = vector;
             // clear the specific interrupt flag just serviced
             self.bus.write(0xFF0F, if_reg & ~bit);
+        }
+    }
+
+    pub fn update_timers(self: *DmgCpu, cycles: u16) void {
+        // update DIV
+        // DIV increments at 16384 Hz (every 256 CPU clock cycles)
+        self.div_clock += cycles;
+        while (self.div_clock >= 256) {
+            self.div_clock -= 256;
+            // DIV register is the high byte of the counter
+            self.bus.mem_raw[0xFF04] +%= 1; // wrapping is fine here idk
+        }
+
+        // update TIMA
+        // TIMA only increments if the TAC (timer control) is enabled (on bit 2)
+        const tac = self.bus.mem_raw[0xFF07];
+        const timer_enable = (tac & 0x04) != 0;
+
+        if (timer_enable) {
+            self.tima_clock += cycles;
+
+            // frequency determined by TAC bits 1-0:
+            // 00=4096Hz (1024 cycles), 01=262144Hz (16 cycles), 10=65536Hz (64 cycles), 11=16384Hz (256 cycles)
+            const frequency_cycles: u16 = switch (tac & 0x03) {
+                0 => 1024,
+                1 => 16,
+                2 => 64,
+                3 => 256,
+                else => unreachable,
+            };
+
+            while (self.tima_clock >= frequency_cycles) {
+                self.tima_clock -= frequency_cycles;
+
+                const tima = self.bus.mem_raw[0xFF05];
+
+                // overflow check (255 -> 0)
+                if (tima == 0xFF) {
+                    // set timer interrupt (bit 2 of IF register 0xFF0F)
+                    self.bus.mem_raw[0xFF0F] |= 0x04;
+                    // reset TIMA to TMA (timer modulo, 0xFF06)
+                    self.bus.mem_raw[0xFF05] = self.bus.mem_raw[0xFF06];
+                } else {
+                    self.bus.mem_raw[0xFF05] = tima + 1;
+                }
+            }
         }
     }
 
@@ -408,6 +458,72 @@ pub const DmgCpu = struct {
                 return 2;
             },
 
+            // ADD A, r (add register r to A)
+            0x80...0x87 => {
+                const src_code = opcode & 0b111;
+                const val = if (src_code == 0b110)
+                    self.bus.read(self.get_hl())
+                else
+                    self.decode_register_ptr(src_code).*;
+
+                const a_val = self.a;
+                const result = a_val +% val;
+                self.a = result;
+
+                // flags: Z, N=0, H (carry from bit 3), C (carry from bit 7)
+                const z_flag = if (result == 0) FLAG_Z else 0;
+                const h_flag = if (((a_val & 0x0F) + (val & 0x0F)) > 0x0F) FLAG_H else 0;
+                const c_flag = if (@as(u16, a_val) + @as(u16, val) > 0xFF) FLAG_C else 0;
+
+                self.f = z_flag | h_flag | c_flag;
+                return if (src_code == 0b110) 2 else 1;
+            },
+
+            // ADC A, r (add register r to A with carry)
+            0x88...0x8F => {
+                const src_code = opcode & 0b111;
+                const val = if (src_code == 0b110)
+                    self.bus.read(self.get_hl())
+                else
+                    self.decode_register_ptr(src_code).*;
+
+                const carry = if ((self.f & FLAG_C) != 0) @as(u8, 1) else 0;
+                const a_val = self.a;
+                const result = a_val +% val +% carry;
+
+                self.a = result;
+
+                // flags: Z, N=0, H (carry from bit 3), C (carry from bit 7)
+                const z_flag = if (result == 0) FLAG_Z else 0;
+                // half carry: check if bit 3 overflowed
+                const h_flag = if ((a_val & 0x0F) + (val & 0x0F) + carry > 0x0F) FLAG_H else 0;
+                // carry: check if bit 7 overflowed
+                const c_flag = if (@as(u16, a_val) + @as(u16, val) + @as(u16, carry) > 0xFF) FLAG_C else 0;
+
+                self.f = z_flag | h_flag | c_flag;
+                return if (src_code == 0b110) 2 else 1;
+            },
+
+            // CP r (compare A with register r)
+            0xB8...0xBF => {
+                const src_code = opcode & 0b111;
+                const val = if (src_code == 0b110)
+                    self.bus.read(self.get_hl())
+                else
+                    self.decode_register_ptr(src_code).*;
+
+                const a_val = self.a;
+
+                // flags: Z (set if 0), N=1, H (borrow from bit 4), C (A < val)
+                const z_flag = if (a_val == val) FLAG_Z else 0;
+                const n_flag = FLAG_N;
+                const h_flag = if ((a_val & 0x0F) < (val & 0x0F)) FLAG_H else 0;
+                const c_flag = if (a_val < val) FLAG_C else 0;
+
+                self.f = z_flag | n_flag | h_flag | c_flag;
+                return if (src_code == 0b110) 2 else 1;
+            },
+
             // LD r, r'
             // manual format: 01 r r' (bits 7-6 are '01')
             // range: 0x40 (01 000 000) to 0x7F (01 111 111)
@@ -416,14 +532,6 @@ pub const DmgCpu = struct {
                 const dest_code = (opcode >> 3) & 0b111;
                 // source bits 2-0 (r')
                 const src_code = opcode & 0b111;
-
-                // special case: HALT exception (0x76)
-                if (opcode == 0x76) {
-                    // TODO HALT logic here
-                    return 1;
-                }
-
-                // note: will need to handle (HL) separately for full support
 
                 const val = if (src_code == 0b110)
                     self.bus.read(self.get_hl()) // read mem at (HL)
@@ -496,7 +604,6 @@ pub const DmgCpu = struct {
             },
 
             // LD A, (HLI) (load A from (HL), then increment HL)
-            // Oopcode: 2A, cycles: 8 (2 machine cycles)
             0x2A => {
                 const addr = self.get_hl();
                 self.a = self.bus.read(addr);
@@ -547,6 +654,27 @@ pub const DmgCpu = struct {
                 return 4;
             },
 
+            // LD A, (DE) (load A from address pointed by DE)
+            0x1A => {
+                self.a = self.bus.read(self.get_de());
+                return 2;
+            },
+
+            // LD (HLI), A (store A to (HL) and increment HL)
+            0x22 => {
+                const addr = self.get_hl();
+                self.bus.write(addr, self.a);
+                self.set_hl(addr +% 1); // wrapping addition
+                return 2;
+            },
+
+            // LD A, (nn) (load A from absolute address nn)
+            0xFA => {
+                const addr = self.fetch16();
+                self.a = self.bus.read(addr);
+                return 4;
+            },
+
             // DEC r (decrement 8-bit Register)
             // manual Format: 00 r 101
             0x05, 0x0D, 0x15, 0x1D, 0x25, 0x2D, 0x3D => {
@@ -587,6 +715,26 @@ pub const DmgCpu = struct {
                 const target = self.fetch16();
                 self.pc = target;
                 return 4;
+            },
+
+            // JP cc, nn (jump absolute conditional)
+            0xC2, 0xCA, 0xD2, 0xDA => {
+                const target = self.fetch16(); // PC now pointing to instruction after address
+
+                const condition = switch (opcode) {
+                    0xC2 => !self.get_flag(FLAG_Z), // NZ
+                    0xCA => self.get_flag(FLAG_Z), // Z
+                    0xD2 => !self.get_flag(FLAG_C), // NC
+                    0xDA => self.get_flag(FLAG_C), // C
+                    else => unreachable,
+                };
+
+                if (condition) {
+                    self.pc = target;
+                    return 4;
+                } else {
+                    return 3;
+                }
             },
 
             // JR n (jump relative)
@@ -642,6 +790,28 @@ pub const DmgCpu = struct {
                 return 4;
             },
 
+            // RET cc (return conditional)
+            0xC0, 0xC8, 0xD0, 0xD8 => {
+                const condition = switch (opcode) {
+                    0xC0 => !self.get_flag(FLAG_Z), // NZ
+                    0xC8 => self.get_flag(FLAG_Z), // Z
+                    0xD0 => !self.get_flag(FLAG_C), // NC
+                    0xD8 => self.get_flag(FLAG_C), // C
+                    else => unreachable,
+                };
+
+                if (condition) {
+                    const low = self.bus.read(self.sp);
+                    self.sp +%= 1;
+                    const high = self.bus.read(self.sp);
+                    self.sp +%= 1;
+                    self.pc = (@as(u16, high) << 8) | @as(u16, low);
+                    return 5;
+                } else {
+                    return 2;
+                }
+            },
+
             // OR r (logical OR A with register r)
             0xB0...0xB7 => {
                 const src_code = opcode & 0b111;
@@ -681,6 +851,16 @@ pub const DmgCpu = struct {
                 // Z=1 if 0, N=0, H=1, C=0
                 self.f = (if (self.a == 0) FLAG_Z else 0) | FLAG_H;
                 return if (src_code == 0b110) 2 else 1;
+            },
+
+            // AND n (AND A with immediate byte n)
+            0xE6 => {
+                const n = self.fetch();
+                self.a &= n;
+
+                // Z=1 if 0, N=0, H=1, C=0
+                self.f = (if (self.a == 0) FLAG_Z else 0) | FLAG_H;
+                return 2;
             },
 
             // INC r (increment 8-bit register)
@@ -793,6 +973,13 @@ pub const DmgCpu = struct {
                 _ = self.fetch(); // STOP is 2 bytes (10 00)
                 // TODO handle STOP state (LCD off, wait for button)
                 // in the meantime it's like NOP
+                return 1;
+            },
+
+            // HALT
+            // note: this is usually handled inside the 0x40-0x7F block
+            0x76 => {
+                self.halted = true;
                 return 1;
             },
 

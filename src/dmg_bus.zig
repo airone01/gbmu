@@ -91,7 +91,11 @@ pub const DmgBus = struct {
 
             // IO registers
             0xFF00...0xFF7F => {
-                // special write logic
+                // DMA transfer (initiates OAM DMA)
+                if (addr == 0xFF46) {
+                    self.start_dma_transfer(value);
+                    return;
+                }
 
                 // DIV register (0xFF04): writing any value resets it to 0
                 if (addr == 0xFF04) {
@@ -119,8 +123,8 @@ pub const DmgBus = struct {
         }
     }
 
-    // basic OAM DMA implementation
-    // note: instant transfer for now
+    /// basic OAM DMA implementation
+    /// note: instant transfer for now
     fn start_dma_transfer(self: *DmgBus, value: u8) void {
         // source address is value * 0x100
         const start_addr = @as(u16, value) << 8;
