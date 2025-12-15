@@ -108,10 +108,33 @@ pub const DmgCpu = struct {
         }
     }
 
+    /// helper to get a pointer to an 8-bit register based on the 3-bit code
+    /// 0=B, 1=C, 2=D, 3=E, 4=H, 5=L, 7=A
+    fn decode_register_ptr(self: *DmgCpu, code: u8) *u8 {
+        return switch (code) {
+            0 => &self.b,
+            1 => &self.c,
+            2 => &self.d,
+            3 => &self.e,
+            4 => &self.h,
+            5 => &self.l,
+            // code 6 is (HL) which is handled explicitly by caller
+            7 => &self.a,
+            else => unreachable,
+        };
+    }
+
+    /// helper to read a 16-bit value (little endian)
+    fn fetch16(self: *DmgCpu) u16 {
+        const low = self.fetch();
+        const high = self.fetch();
+        return (@as(u16, high) << 8) | @as(u16, low);
+    }
+
     /// execute a CPU step
     /// returns cpu count of cycles taken
-    fn step(self: *DmgCpu) u16 {
-        const opcode: u8 = self.pc;
+    pub fn step(self: *DmgCpu) u16 {
+        const opcode: u8 = self.bus.read(self.pc);
 
         // increment pc to point to the next byte
         self.pc += 1;
@@ -139,12 +162,12 @@ pub const DmgCpu = struct {
                 // note: will need to handle (HL) separately for full support
 
                 const val = if (src_code == 0b110)
-                    self.bus.read(self.cpu.get_hl()) // read mem at (HL)
+                    self.bus.read(self.get_hl()) // read mem at (HL)
                 else
                     self.decode_register_ptr(src_code).*; // read register
 
                 if (dest_code == 0b110) {
-                    self.bus.write(self.cpu.get_hl(), val); // write memory at (HL)
+                    self.bus.write(self.get_hl(), val); // write memory at (HL)
                 } else {
                     self.decode_register_ptr(dest_code).* = val; // write register
                 }
@@ -160,7 +183,7 @@ pub const DmgCpu = struct {
                 const n = self.fetch(); // load immediate value (n)
 
                 if (dest_code == 0b110) { // LD (HL), n
-                    self.bus.write(self.cpu.get_hl(), n);
+                    self.bus.write(self.get_hl(), n);
                     return 3; // memory write takes longer
                 } else {
                     self.decode_register_ptr(dest_code).* = n;
@@ -168,9 +191,153 @@ pub const DmgCpu = struct {
                 }
             },
 
+            // LD (HLD), A (load A to (HL) and decrement HL)
+            // opcode: 32, cycles: 8 (2 machine cycles)
+            0x32 => {
+                const addr = self.get_hl();
+                self.bus.write(addr, self.a);
+                // doing wrapping subtraction (-%) so 0x0000 wraps to 0xFFFF
+                self.set_hl(addr -% 1);
+                return 2;
+            },
+
+            // DEC ss (decrement 16-bit register)
+            // opcodes: 0B (BC), 1B (DE), 2B (HL), 3B (SP)
+            // cycles: 8 (2 machine cycles)
+            0x0B, 0x1B, 0x2B, 0x3B => {
+                const target_code = (opcode >> 4) & 0b11;
+                switch (target_code) {
+                    0 => self.set_bc(self.get_bc() -% 1),
+                    1 => self.set_de(self.get_de() -% 1),
+                    2 => self.set_hl(self.get_hl() -% 1),
+                    3 => self.sp -%= 1,
+                    else => unreachable,
+                }
+                return 2;
+            },
+
+            // OR r (logical OR A with register r)
+            // opcodes: B0...B7
+            // cycles: 4 (1 machine cycle) - (HL) is 8 cycles
+            0xB0...0xB7 => {
+                const src_code = opcode & 0b111;
+                const val = if (src_code == 0b110)
+                    self.bus.read(self.get_hl())
+                else
+                    self.decode_register_ptr(src_code).*;
+
+                self.a |= val;
+
+                // flags: Z (if result 0), N=0, H=0, C=0
+                const z_flag = if (self.a == 0) FLAG_Z else 0;
+                self.f = z_flag; // clears N, H, C automatically
+                
+                return if (src_code == 0b110) 2 else 1;
+            },
+
+            // JP nn (jump absolute)
+            // opcode: C3, cycles: 16 (4 machine cycles)
+            0xC3 => {
+                const target = self.fetch16();
+                self.pc = target;
+                return 4;
+            },
+
+            // JR n (jump relative)
+            // opcode: 18, cycles: 12 (3 machine cycles)
+            // n is a *signed* 8-bit offset
+            0x18 => {
+                const offset = @as(i8, @bitCast(self.fetch()));
+                // wrapping addition with +%= though PC shouldn't overflow in valid ROMs
+                self.pc +%= @as(u16, @bitCast(@as(i16, offset)));
+                return 3;
+            },
+
+            // JR cc, n (jump relative conditional)
+            // opcodes: 20 (NZ), 28 (Z), 30 (NC), 38 (C)
+            // cycles: 12 if jump taken, 8 if not
+            0x20, 0x28, 0x30, 0x38 => {
+                const offset = @as(i8, @bitCast(self.fetch()));
+
+                const condition = switch (opcode) {
+                    0x20 => !self.get_flag(FLAG_Z), // NZ (not zero)
+                    0x28 => self.get_flag(FLAG_Z), // Z (zero)
+                    0x30 => !self.get_flag(FLAG_C), // NC (no carry)
+                    0x38 => self.get_flag(FLAG_C), // C (carry)
+                    else => unreachable,
+                };
+
+                if (condition) {
+                    self.pc +%= @as(u16, @bitCast(@as(i16, offset))); // see 0x18
+                    return 3;
+                } else {
+                    return 2;
+                }
+            },
+
+            // CALL nn (call subroutine)
+            // opcode: CD, cycles: 24 (6 machine cycles)
+            0xCD => {
+                const target = self.fetch16();
+                // push current PC (next instruction) onto stack
+                self.sp -= 1;
+                self.bus.write(self.sp, @truncate(self.pc >> 8)); // high byte
+                self.sp -= 1;
+                self.bus.write(self.sp, @truncate(self.pc)); // low byte
+
+                self.pc = target;
+                return 6;
+            },
+
+            // RET (return from subroutine)
+            // opcode: C9, cycles: 16 (4 machine cycles)
+            0xC9 => {
+                const low = self.bus.read(self.sp);
+                self.sp += 1;
+                const high = self.bus.read(self.sp);
+                self.sp += 1;
+
+                self.pc = (@as(u16, high) << 8) | @as(u16, low);
+                return 4;
+            },
+
+            // basic ALU stuff
+
+            // XOR A OR (accumulator with itself)
+            // common shortcut to set A = 0
+            // opcode: AF, cycles: 4 (1 machine cycle)
+            0xAF => {
+                self.a = self.a ^ self.a; // always 0
+                // flags: Z=1, N=0, H=0, C=0
+                self.f = FLAG_Z;
+                return 1;
+            },
+
+            // INC r (increment 8-bit register)
+            // opcodes: 04, 0C, 14, 1C, 24, 2C, 3C
+            // manual format: 00 r 100
+            0x04, 0x0C, 0x14, 0x1C, 0x24, 0x2C, 0x3C => {
+                const target_code = (opcode >> 3) & 0b111;
+                const ptr = self.decode_register_ptr(target_code);
+
+                const original = ptr.*;
+                const result = original +% 1;
+                ptr.* = result;
+
+                // flags: Z (set if 0), N=0, H (half carry), C (not affected)
+                const z_flag = if (result == 0) FLAG_Z else 0;
+                // half carry: set if carry from bit 3
+                const h_flag = if ((original & 0x0F) + 1 > 0x0F) FLAG_H else 0;
+
+                // preserve C flag, set others
+                self.f = (self.f & FLAG_C) | z_flag | h_flag; // N cleared
+
+                return 1;
+            },
+
             // fallback for unimplemented opcodes
             else => {
-                std.debug.print("Unknown Opcode: 0x{x:0>2}\n", .{opcode});
+                std.debug.print("Unknown opcode: 0x{x:0>2}\n", .{opcode});
                 return 0;
             },
         }

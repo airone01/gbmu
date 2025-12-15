@@ -1,18 +1,53 @@
 const std = @import("std");
 
-const DmgBus = @import("dmg").DmgBus;
-const DmgCpu = @import("dmg_cpu").DmgCpu;
+const DmgBus = @import("dmg_bus.zig").DmgBus;
+const DmgCpu = @import("dmg_cpu.zig").DmgCpu;
 const SDL = @import("sdl2");
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+
+    if (args.len < 2) {
+        std.debug.print("usage: {s} <path_to_rom.gb>\n", .{args[0]});
+        return;
+    }
+
+    const rom_path = args[1];
+
+    std.debug.print("loading ROM...", .{});
+    const file = try std.fs.cwd().openFile(rom_path, .{});
+    defer file.close();
+
+    const file_size = (try file.stat()).size;
+    const rom_buffer = try allocator.alloc(u8, file_size);
+    defer allocator.free(rom_buffer);
+
+    const bytes_read = try file.readAll(rom_buffer);
+    if (bytes_read != file_size) {
+        std.debug.print("Error: Could not read entire file.\n", .{});
+        return;
+    }
+
+    var bus = DmgBus.init();
+    bus.load_rom(rom_buffer);
+
+    var cpu = DmgCpu.init(&bus);
+
     if (SDL.SDL_Init(SDL.SDL_INIT_VIDEO | SDL.SDL_INIT_EVENTS | SDL.SDL_INIT_AUDIO) < 0)
         sdl_panic();
     defer SDL.SDL_Quit();
 
     const window = SDL.SDL_CreateWindow(
         "gbmu?",
-        SDL.SDL_WINDOWPOS_CENTERED, SDL.SDL_WINDOWPOS_CENTERED,
-        640, 480,
+        SDL.SDL_WINDOWPOS_CENTERED,
+        SDL.SDL_WINDOWPOS_CENTERED,
+        640,
+        480,
         SDL.SDL_WINDOW_SHOWN,
     ) orelse sdl_panic();
     defer _ = SDL.SDL_DestroyWindow(window);
@@ -20,19 +55,25 @@ pub fn main() !void {
     const renderer = SDL.SDL_CreateRenderer(window, -1, SDL.SDL_RENDERER_ACCELERATED) orelse sdl_panic();
     defer _ = SDL.SDL_DestroyRenderer(renderer);
 
-    // const dmg_bus = DmgBus.init();
-
-    mainLoop: while (true) {
+    var running = true;
+    while (running) {
         var ev: SDL.SDL_Event = undefined;
         while (SDL.SDL_PollEvent(&ev) != 0) {
-            if(ev.type == SDL.SDL_QUIT)
-                break :mainLoop;
+            switch (ev.type) {
+                SDL.SDL_QUIT => running = false,
+                else => {},
+            }
         }
 
+        step_frame(&cpu);
+
+        // placeholder rendering
         _ = SDL.SDL_SetRenderDrawColor(renderer, 0xF7, 0xA4, 0x1D, 0xFF);
         _ = SDL.SDL_RenderClear(renderer);
-
         SDL.SDL_RenderPresent(renderer);
+
+        // tmp simple delay to avoid going too fast
+        SDL.SDL_Delay(16);
     }
 }
 
@@ -43,12 +84,13 @@ fn sdl_panic() noreturn {
 
 const MAX_CYCLES_PER_FRAME = 70224;
 
-fn step_frame(cpu: *DmgCpu) noreturn {
+fn step_frame(cpu: *DmgCpu) void {
     // cycles taken for the whole fame
-    var frame_cycles: u16 = 0;
+    var frame_cycles: u32 = 0; // u32 > MAX_CYCLES_PER_FRAME
 
     while (frame_cycles < MAX_CYCLES_PER_FRAME) {
         // cycles taken this one cpu step
+        // manual 2.1: DMG CPU cycles are 0.954 µs (1 machine cycle = 4 clock cycles)
         const cycles = cpu.step() * 4;
 
         // then we sync hardware depending on how much time we took
@@ -56,7 +98,7 @@ fn step_frame(cpu: *DmgCpu) noreturn {
         // update_graphics(cycles);
         // handle_interrupts();
         // ... or something like that
-        
+
         frame_cycles += cycles;
     }
 }
