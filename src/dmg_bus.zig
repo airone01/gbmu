@@ -3,13 +3,6 @@ const std = @import("std");
 const mem_bytes = 0x10000;
 
 /// DMG memory bus implementation
-///
-/// Note: area from 0xE000 to 0xFDFF is actually echo RAM in DMG.
-/// Meaning the expected behavior when writing to 0xC000 is the same value
-/// appearing at 0xE000.
-/// This is a problem because for now we're accessing the data directly with the slices,
-/// but eventually if we want to "translate" memory access, we will need to
-/// implement a function `read(addr)` or something similar.
 pub const DmgBus = struct {
     /// general memory buffer
     /// we access it with methods
