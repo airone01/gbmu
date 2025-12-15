@@ -10,6 +10,10 @@ const DmgPpu = _ppu.DmgPpu;
 // yes, the Game Boy ran at (almost) 60 FPS
 const TARGET_FRAME_TIME_MS = 1000 / 60;
 
+/// "alive" indicator
+/// @intFromFloat is heavy, so calling it 3 times per frame slows the emu
+/// TODO implement a lookup table of colors instead of that
+/// this is so over the top but I love it
 fn getRainbowColor() u32 {
     const t = @as(f32, @floatFromInt(SDL.SDL_GetTicks()));
     const speed = 0.002;
