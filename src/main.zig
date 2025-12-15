@@ -104,7 +104,7 @@ pub fn main() !void {
         SDL.SDL_RenderPresent(renderer);
 
         // tmp simple delay to avoid going too fast
-        // SDL.SDL_Delay(16);
+        SDL.SDL_Delay(16);
     }
 }
 
