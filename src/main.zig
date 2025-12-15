@@ -1,6 +1,8 @@
 const std = @import("std");
 const SDL = @import("sdl2");
 
+const DmgBus = @import("gbmu").DmgBus;
+
 pub fn main() !void {
     if (SDL.SDL_Init(SDL.SDL_INIT_VIDEO | SDL.SDL_INIT_EVENTS | SDL.SDL_INIT_AUDIO) < 0)
         sdlPanic();
@@ -16,6 +18,8 @@ pub fn main() !void {
 
     const renderer = SDL.SDL_CreateRenderer(window, -1, SDL.SDL_RENDERER_ACCELERATED) orelse sdlPanic();
     defer _ = SDL.SDL_DestroyRenderer(renderer);
+
+    // const dmg_bus = DmgBus.init();
 
     mainLoop: while (true) {
         var ev: SDL.SDL_Event = undefined;
