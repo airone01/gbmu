@@ -4,6 +4,8 @@ const DmgBus = @import("dmg_bus.zig").DmgBus;
 pub const DmgCpu = struct {
     bus: *DmgBus,
     cycles: u128 = 0,
+    ime: bool = false, // interrupt master enable
+    halted: bool = false, // CPU halted state
 
     // 8-bit general purpose registers
     a: u8, // accumulator
@@ -28,6 +30,8 @@ pub const DmgCpu = struct {
     pub fn init(bus: *DmgBus) DmgCpu {
         return DmgCpu{
             .bus = bus,
+            .ime = false,
+            .halted = false,
             // initial values based for DMG boot state
             .a = 0x01, // 0x01 for DMG, 0x11 for CGB
             .f = 0xB0,
@@ -131,6 +135,56 @@ pub const DmgCpu = struct {
         return (@as(u16, high) << 8) | @as(u16, low);
     }
 
+    pub fn handle_interrupts(self: *DmgCpu) void {
+        const ie = self.bus.read(0xFFFF);
+        const if_reg = self.bus.read(0xFF0F);
+
+        const pending = ie & if_reg & 0x1F;
+        if (pending == 0) return;
+
+        // if halted, any interrupt wakes the CPU
+        if (self.halted) {
+            self.halted = false;
+        }
+
+        // service interrupt only if IME is ON
+        if (self.ime) {
+            self.ime = false; // disable further interrupts
+
+            // push PC to stack
+            self.sp -= 1;
+            self.bus.write(self.sp, @truncate(self.pc >> 8));
+            self.sp -= 1;
+            self.bus.write(self.sp, @truncate(self.pc));
+
+            // jump to vector and clear IF bit
+            // priority: VBlank (0) -> LCD (1) -> timer (2) -> serial (3) -> joypad (4)
+            var vector: u16 = 0;
+            var bit: u8 = 0;
+
+            if ((pending & 0x01) != 0) { // VBlank
+                vector = 0x0040;
+                bit = 0x01;
+            } else if ((pending & 0x02) != 0) { // LCD stat
+                vector = 0x0048;
+                bit = 0x02;
+            } else if ((pending & 0x04) != 0) { // timer
+                vector = 0x0050;
+                bit = 0x04;
+            } else if ((pending & 0x08) != 0) { // serial
+                vector = 0x0058;
+                bit = 0x08;
+            } else if ((pending & 0x10) != 0) { // joypad
+                vector = 0x0060;
+                bit = 0x10;
+            }
+
+            self.pc = vector;
+            // clear the specific interrupt flag just serviced
+            self.bus.write(0xFF0F, if_reg & ~bit);
+        }
+    }
+
     /// execute a CPU step
     /// returns cpu count of cycles taken
     pub fn step(self: *DmgCpu) u16 {
@@ -199,6 +253,29 @@ pub const DmgCpu = struct {
                 // doing wrapping subtraction (-%) so 0x0000 wraps to 0xFFFF
                 self.set_hl(addr -% 1);
                 return 2;
+            },
+
+            // DEC r (decrement 8-bit Register)
+            // opcodes: 05, 0D, 15, 1D, 25, 2D, 3D
+            // manual Format: 00 r 101
+            0x05, 0x0D, 0x15, 0x1D, 0x25, 0x2D, 0x3D => {
+                const target_code = (opcode >> 3) & 0b111;
+                const ptr = self.decode_register_ptr(target_code);
+
+                const original = ptr.*;
+                const result = original -% 1;
+                ptr.* = result;
+
+                // flags: Z (set if 0), N=1 (Subtract), H (half carry), C (not affected)
+                const z_flag = if (result == 0) FLAG_Z else 0;
+                const n_flag = FLAG_N; // always set for DEC
+                // half carry: set if borrow from bit 4. (original & 0xF) == 0 means result will wrap 0->F
+                const h_flag = if ((original & 0x0F) == 0) FLAG_H else 0;
+
+                // preserve C flag
+                self.f = (self.f & FLAG_C) | z_flag | n_flag | h_flag;
+
+                return 1;
             },
 
             // DEC ss (decrement 16-bit register)
@@ -301,8 +378,6 @@ pub const DmgCpu = struct {
                 return 4;
             },
 
-            // basic ALU stuff
-
             // XOR A OR (accumulator with itself)
             // common shortcut to set A = 0
             // opcode: AF, cycles: 4 (1 machine cycle)
@@ -384,6 +459,22 @@ pub const DmgCpu = struct {
                 const addr = 0xFF00 + @as(u16, offset);
                 self.a = self.bus.read(addr);
                 return 3;
+            },
+
+            // EI (Enable Interrupts)
+            // opcode: FB, cycles: 4
+            0xFB => {
+                // note: irl hardware enables interrupts after the next instruction not during this one
+                // idk if it's a problem, assuming not
+                self.ime = true;
+                return 1;
+            },
+
+            // DI (disable interrupts)
+            // opcode: F3, cycles: 4
+            0xF3 => {
+                self.ime = false;
+                return 1;
             },
 
             // fallback for unimplemented opcodes

@@ -27,6 +27,12 @@ pub const DmgPpu = struct {
             ly += 1;
 
             // 154 Scanlines total (0-143 Visible, 144-153 VBlank)
+            if (ly == 144) {
+                // request VBlank interrupt (bit 0 of IF register 0xFF0F)
+                const if_val = self.bus.mem_raw[0xFF0F];
+                self.bus.mem_raw[0xFF0F] = if_val | 0x01;
+            }
+
             if (ly > 153) {
                 ly = 0;
             }

@@ -91,16 +91,23 @@ fn step_frame(cpu: *DmgCpu, ppu: *DmgPpu) void {
     var frame_cycles: u32 = 0; // u32 > MAX_CYCLES_PER_FRAME
 
     while (frame_cycles < MAX_CYCLES_PER_FRAME) {
+        cpu.handle_interrupts();
+
         // cycles taken this one cpu step
         // manual 2.1: DMG CPU cycles are 0.954 µs (1 machine cycle = 4 clock cycles)
-        const cycles = cpu.step() * 4;
+        var cycles_taken: u16 = 0;
+        if (cpu.halted) {
+            cycles_taken = 4; // when halted just wait
+        } else {
+            cycles_taken = cpu.step() * 4;
+        }
 
         // then we sync hardware depending on how much time we took
-        // update_timers(cycles);
-        ppu.step(cycles);
+        // update_timers(cycles_taken);
+        ppu.step(cycles_taken);
         // handle_interrupts();
         // ... or something like that
 
-        frame_cycles += cycles;
+        frame_cycles += cycles_taken;
     }
 }
