@@ -12,14 +12,11 @@ pub const TerminalPlatform = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) !TerminalPlatform {
-        // Get stdin and stdout as File handles
         const stdin = std.fs.File{ .handle = std.posix.STDIN_FILENO };
         const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-
-        // Save original terminal settings
         const original_termios = try std.posix.tcgetattr(stdin.handle);
 
-        // Set terminal to raw mode
+        // set terminal to raw mode
         var raw = original_termios;
         raw.lflag.ECHO = false;
         raw.lflag.ICANON = false;
@@ -36,11 +33,10 @@ pub const TerminalPlatform = struct {
         raw.cc[@intFromEnum(std.posix.V.MIN)] = 0;
 
         try std.posix.tcsetattr(stdin.handle, .FLUSH, raw);
-
-        // Hide cursor and clear screen
+        // hide cursor and clear screen
         try stdout.writeAll("\x1b[?25l\x1b[2J\x1b[H");
 
-        // Allocate a buffer large enough for the screen
+        // allocate a buffer large enough for the screen
         // 160 width * 72 lines * ~40 bytes per pixel (ANSI codes) + controls
         const buffer = try allocator.alloc(u8, 500000);
         errdefer allocator.free(buffer);
@@ -56,23 +52,17 @@ pub const TerminalPlatform = struct {
     }
 
     pub fn deinit(self: *TerminalPlatform) void {
-        // Restore terminal settings
+        // restore terminal settings
         std.posix.tcsetattr(self.stdin.handle, .FLUSH, self.original_termios) catch {};
-
-        // Show cursor and clear screen
+        // show cursor and clear screen
         self.stdout.writeAll("\x1b[?25h\x1b[2J\x1b[H") catch {};
-
         self.allocator.free(self.buffer);
     }
 
     pub fn render(self: *TerminalPlatform, gb: *GameBoy) !void {
         self.buffer_pos = 0;
+        try self.writeStr("\x1b[H"); // move cursor to home position
 
-        // Move cursor to home position
-        try self.writeStr("\x1b[H");
-
-        // Render using half-block characters (▀)
-        // Each character cell represents 2 vertical pixels
         var y: usize = 0;
         while (y < Ppu.SCREEN_HEIGHT) : (y += 2) {
             var x: usize = 0;
@@ -86,30 +76,25 @@ pub const TerminalPlatform = struct {
                 else
                     top_color;
 
-                // Extract RGB from 0xAARRGGBB
+                // extract RGB from 0xAARRGGBB
                 const top_r = (top_color >> 16) & 0xFF;
                 const top_g = (top_color >> 8) & 0xFF;
                 const top_b = top_color & 0xFF;
-
                 const bottom_r = (bottom_color >> 16) & 0xFF;
                 const bottom_g = (bottom_color >> 8) & 0xFF;
                 const bottom_b = bottom_color & 0xFF;
 
-                // Use upper half block with top color as foreground, bottom as background
+                // use upper half block trick
+                // i know better implementations exist but welp
                 try self.writeFmt("\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m▀", .{
                     top_r,    top_g,    top_b,
                     bottom_r, bottom_g, bottom_b,
                 });
             }
-
-            // Reset colors at end of line
-            try self.writeStr("\x1b[0m\r\n");
+            try self.writeStr("\x1b[0m\r\n"); // reset colors at eol
         }
-
-        // Display controls at bottom
-        try self.writeStr("\r\n\x1b[2mControls: WASD=D-Pad, J=A, K=B, Enter=Start, Space=Select, Q=Quit\x1b[0m");
-
-        // Write buffer to stdout
+        // try self.writeStr("\r\n\x1b[2mControls: WASD=D-Pad, J=A, K=B, Enter=Start, Space=Select, Q=Quit\x1b[0m");
+        // write buffer to stdout
         try self.stdout.writeAll(self.buffer[0..self.buffer_pos]);
     }
 
@@ -123,35 +108,28 @@ pub const TerminalPlatform = struct {
         self.buffer_pos += written.len;
     }
 
+    /// this is simplified, keys release after one frame
+    /// TODO make it better
     pub fn handle_input(self: *TerminalPlatform, gb: *GameBoy) !bool {
         var buf: [16]u8 = undefined;
 
-        // Non-blocking read
+        // non-blocking read
         const n = self.stdin.read(&buf) catch 0;
-
         for (buf[0..n]) |ch| {
             switch (ch) {
-                'q', 'Q', 27 => return false, // q or ESC to quit
-
-                // Arrow keys and WASD
+                'q', 'Q', 27 => return false, // 27 is esc
                 'w', 'W' => gb.key_down(.Up),
                 's', 'S' => gb.key_down(.Down),
                 'a', 'A' => gb.key_down(.Left),
                 'd', 'D' => gb.key_down(.Right),
-
-                // Buttons
                 'j', 'J' => gb.key_down(.A),
                 'k', 'K' => gb.key_down(.B),
-                '\r' => gb.key_down(.Start), // Enter
-                ' ' => gb.key_down(.Select), // Space
-
-                // Handle key releases (simplified - keys release after a frame)
+                '\r' => gb.key_down(.Start), // return
+                ' ' => gb.key_down(.Select), // space
                 else => {},
             }
         }
 
-        // Auto-release all keys (simplified input handling)
-        // In a more sophisticated version, you'd track key states
         gb.key_up(.Up);
         gb.key_up(.Down);
         gb.key_up(.Left);
@@ -164,7 +142,7 @@ pub const TerminalPlatform = struct {
         return true;
     }
 
-    /// Sleep for approximately one frame (60 FPS = ~16.67ms per frame)
+    /// sleep for approx one frame (60 FPS = ~16.67ms per frame)
     pub fn frame_sleep(self: *TerminalPlatform) void {
         _ = self;
         std.Thread.sleep(16_666_667); // nanoseconds

@@ -30,7 +30,7 @@ pub fn main() !void {
 
     const matches = try app.parseProcess();
     // positional arg is guaranteed by parseProcess
-    const rom_path = matches.getSingleValue("ROM_PATH").?;
+    const rom_path = matches.getSingleValue("path").?;
     const debug = matches.containsArg("debug");
     const use_terminal = matches.containsArg("terminal");
 
