@@ -22,8 +22,8 @@ pub fn main() !void {
 
     var root = app.rootCommand();
     try root.addArgs(&[_]Arg{
-        Arg.positional("ROM_PATH", "Path to the Game Boy ROM file (.gb)", null),
-        Arg.booleanOption("debug", 'd', "Enables debug mode for instruction tracing and logging."),
+        Arg.positional("path", "Path to the DMG ROM file (.gb)", null),
+        Arg.booleanOption("debug", 'd', "Enables debug mode."),
         Arg.booleanOption("terminal", 't', "Use terminal renderer instead of SDL window."),
     });
     root.setProperty(.help_on_empty_args);
