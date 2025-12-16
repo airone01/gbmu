@@ -492,6 +492,23 @@ pub const Cpu = struct {
                 return 2;
             },
 
+            // ADD SP, e8
+            0xE8 => {
+                const offset = @as(i8, @bitCast(self.fetch()));
+                const sp_val = self.sp;
+
+                const signed_offset_16 = @as(u16, @bitCast(@as(i16, offset)));
+                self.sp = sp_val +% signed_offset_16;
+                self.f = 0; // clear Z and N
+                const u_offset = @as(u16, @as(u8, @bitCast(offset)));
+
+                // half Carry: overflow from bit 3
+                if ((sp_val & 0xF) + (u_offset & 0xF) > 0xF) self.f |= FLAG_H;
+                // carry: overflow from bit 7 (not bit 15!)
+                if ((sp_val & 0xFF) + (u_offset & 0xFF) > 0xFF) self.f |= FLAG_C;
+                return 4;
+            },
+
             // SBC A, r (subtract with carry)
             0x98...0x9F => {
                 const src_code = opcode & 0b111;
@@ -596,7 +613,6 @@ pub const Cpu = struct {
 
             // LD r, r'
             // manual format: 01 r r' (bits 7-6 are '01')
-            // range: 0x40 (01 000 000) to 0x7F (01 111 111)
             0x40...0x75, 0x77...0x7F => {
                 // dest bits 5-3 (r)
                 const dest_code = (opcode >> 3) & 0b111;
@@ -636,7 +652,6 @@ pub const Cpu = struct {
             0x32 => {
                 const addr = self.get_hl();
                 self.bus.write(addr, self.a);
-                // doing wrapping subtraction (-%) so 0x0000 wraps to 0xFFFF
                 self.set_hl(addr -% 1);
                 return 2;
             },
@@ -676,7 +691,15 @@ pub const Cpu = struct {
             0x2A => {
                 const addr = self.get_hl();
                 self.a = self.bus.read(addr);
-                self.set_hl(addr +% 1); // wrapping addition (+%)
+                self.set_hl(addr +% 1);
+                return 2;
+            },
+
+            // LD A, (HLD) - Load A from (HL), then decrement HL
+            0x3A => {
+                const addr = self.get_hl();
+                self.a = self.bus.read(addr);
+                self.set_hl(addr -% 1);
                 return 2;
             },
 
@@ -697,6 +720,23 @@ pub const Cpu = struct {
             0x36 => {
                 const n = self.fetch();
                 self.bus.write(self.get_hl(), n);
+                return 3;
+            },
+
+            // LD HL, SP+r8
+            0xF8 => {
+                const offset = @as(i8, @bitCast(self.fetch()));
+                const sp_val = self.sp;
+
+                // calculate result (SP + signed offset)
+                const signed_offset_16 = @as(u16, @bitCast(@as(i16, offset)));
+                const result = sp_val +% signed_offset_16;
+                self.set_hl(result);
+                self.f = 0; // clear Z and N
+
+                const u_offset = @as(u16, @as(u8, @bitCast(offset)));
+                if ((sp_val & 0xF) + (u_offset & 0xF) > 0xF) self.f |= FLAG_H;
+                if ((sp_val & 0xFF) + (u_offset & 0xFF) > 0xFF) self.f |= FLAG_C;
                 return 3;
             },
 
@@ -739,7 +779,7 @@ pub const Cpu = struct {
             0x22 => {
                 const addr = self.get_hl();
                 self.bus.write(addr, self.a);
-                self.set_hl(addr +% 1); // wrapping addition
+                self.set_hl(addr +% 1);
                 return 2;
             },
 
@@ -748,6 +788,12 @@ pub const Cpu = struct {
                 const addr = self.fetch16();
                 self.a = self.bus.read(addr);
                 return 4;
+            },
+
+            // LD SP, HL
+            0xF9 => {
+                self.sp = self.get_hl();
+                return 2;
             },
 
             // JP nn (jump absolute)
@@ -788,7 +834,11 @@ pub const Cpu = struct {
             // n is a *signed* 8-bit offset
             0x18 => {
                 const offset = @as(i8, @bitCast(self.fetch()));
-                // wrapping addition with +%= though PC shouldn't overflow in valid ROMs
+                // fun fact: PC should not ever overflow in valid ROMs, because
+                // game devs are just better at what they do than me but we're
+                // doing a wrapping addition anyways just in case.
+                // i don't mention usage of wrapping in the rest of the app,
+                // just thought it would be interesting here
                 self.pc +%= @as(u16, @bitCast(@as(i16, offset)));
                 return 3;
             },
@@ -1175,7 +1225,7 @@ pub const Cpu = struct {
             },
 
             // STOP (Stop CPU)
-            0x10 => {
+            0x10 => { // technically 0x10 0x00
                 _ = self.fetch(); // STOP is 2 bytes (10 00)
                 // TODO handle STOP state (LCD off, wait for button)
                 // in the meantime it's like NOP
@@ -1184,6 +1234,11 @@ pub const Cpu = struct {
 
             // HALT
             // note: this is usually handled inside the 0x40-0x7F block
+            // https://www.reddit.com/r/EmuDev/comments/eypxpl/gameboy_halt_exiting_behavior/
+            // there is a famous HALT bug where if interrupts are disabled
+            // (IME=0) but an interrupt is pending, the CPU fails to increment
+            // PC for one instruction.
+            // this could be implemented eventually for fidelity.
             0x76 => {
                 self.halted = true;
                 return 1;
