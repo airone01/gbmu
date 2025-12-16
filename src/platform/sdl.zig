@@ -6,6 +6,24 @@ const Ppu = @import("../core/ppu.zig");
 
 const SCALE = 3; // multiplier of pixel size
 
+const RAINBOW_TABLE = blk: {
+    var colors: [256]u32 = undefined;
+    @setEvalBranchQuota(10000);
+    for (0..256) |i| {
+        // Map [0, 255] to [0, 2PI]
+        const t = @as(f32, @floatFromInt(i)) * (2.0 * std.math.pi / 255.0);
+
+        // Calculate RGB (sine waves phase-shifted by 120 degrees)
+        const r: u32 = @intFromFloat(std.math.sin(t) * 127.0 + 128.0);
+        const g: u32 = @intFromFloat(std.math.sin(t + (2.0 * std.math.pi / 3.0)) * 127.0 + 128.0);
+        const b: u32 = @intFromFloat(std.math.sin(t + (4.0 * std.math.pi / 3.0)) * 127.0 + 128.0);
+
+        // Combine into 0xAARRGGBB format
+        colors[i] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+    }
+    break :blk colors;
+};
+
 pub const SdlPlatform = struct {
     window: *SDL.SDL_Window,
     renderer: *SDL.SDL_Renderer,
@@ -49,6 +67,16 @@ pub const SdlPlatform = struct {
     }
 
     pub fn render(self: *SdlPlatform, gb: *GameBoy) void {
+        // debug rainbow
+        if (gb.config.debug) {
+            const tick = SDL.SDL_GetTicks();
+            const color_idx = (tick / 12) % 256;
+            const color = RAINBOW_TABLE[color_idx];
+
+            const last_pixel_idx = (Ppu.SCREEN_HEIGHT * Ppu.SCREEN_WIDTH) - 1;
+            gb.ppu.video_buffer[last_pixel_idx] = color;
+        }
+
         _ = SDL.SDL_UpdateTexture(self.texture, null, @ptrCast(&gb.ppu.video_buffer), Ppu.SCREEN_WIDTH * @sizeOf(u32));
         _ = SDL.SDL_RenderClear(self.renderer);
         _ = SDL.SDL_RenderCopy(self.renderer, self.texture, null, null);
