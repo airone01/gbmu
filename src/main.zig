@@ -1,10 +1,16 @@
 const std = @import("std");
 const GameBoy = @import("core/gameboy.zig").GameBoy;
-const Platform = @import("platform/sdl.zig").SdlPlatform;
+const SdlPlatform = @import("platform/sdl.zig").SdlPlatform;
+const TerminalPlatform = @import("platform/terminal.zig").TerminalPlatform;
 const Config = @import("config.zig").Config;
 const yazap = @import("yazap");
 const Arg = yazap.Arg;
 const App = yazap.App;
+
+const RenderMode = enum {
+    sdl,
+    terminal,
+};
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -18,6 +24,7 @@ pub fn main() !void {
     try root.addArgs(&[_]Arg{
         Arg.positional("ROM_PATH", "Path to the Game Boy ROM file (.gb)", null),
         Arg.booleanOption("debug", 'd', "Enables debug mode for instruction tracing and logging."),
+        Arg.booleanOption("terminal", 't', "Use terminal renderer instead of SDL window."),
     });
     root.setProperty(.help_on_empty_args);
 
@@ -25,6 +32,7 @@ pub fn main() !void {
     // positional arg is guaranteed by parseProcess
     const rom_path = matches.getSingleValue("ROM_PATH").?;
     const debug = matches.containsArg("debug");
+    const use_terminal = matches.containsArg("terminal");
 
     const config = Config{
         .rom_path = rom_path,
@@ -48,13 +56,36 @@ pub fn main() !void {
     defer gb.deinit();
 
     // platform
-    var platform = try Platform.init();
+    var platform = try SdlPlatform.init();
     defer platform.deinit();
 
     // loop
+    if (use_terminal) {
+        try runWithTerminal(&gb, allocator);
+    } else {
+        try runWithSdl(&gb);
+    }
+}
+
+fn runWithTerminal(gb: *GameBoy, allocator: std.mem.Allocator) !void {
+    var platform = try TerminalPlatform.init(allocator);
+    defer platform.deinit();
+
     while (true) {
-        if (!platform.handle_input(&gb)) break;
+        if (!try platform.handle_input(gb)) break;
         gb.step_frame();
-        platform.render(&gb);
+        try platform.render(gb);
+        platform.frame_sleep();
+    }
+}
+
+fn runWithSdl(gb: *GameBoy) !void {
+    var platform = try SdlPlatform.init();
+    defer platform.deinit();
+
+    while (true) {
+        if (!platform.handle_input(gb)) break;
+        gb.step_frame();
+        platform.render(gb);
     }
 }
