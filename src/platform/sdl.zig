@@ -16,7 +16,7 @@ pub const SdlPlatform = struct {
             return error.SdlInitFailed;
 
         const window = SDL.SDL_CreateWindow(
-            "Zig GameBoy",
+            "gbmu",
             SDL.SDL_WINDOWPOS_CENTERED,
             SDL.SDL_WINDOWPOS_CENTERED,
             Ppu.SCREEN_WIDTH * SCALE,

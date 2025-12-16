@@ -55,10 +55,6 @@ pub fn main() !void {
     var gb = try GameBoy.init(config, allocator, rom);
     defer gb.deinit();
 
-    // platform
-    var platform = try SdlPlatform.init();
-    defer platform.deinit();
-
     // loop
     if (use_terminal) {
         try runWithTerminal(&gb, allocator);
